@@ -52,3 +52,48 @@ impl Chain {
             Chain::Arbitrum => 250,
             Chain::Base => 2_000,
             Chain::Polygon => 2_000,
+            Chain::BnbChain => 3_000,
+            Chain::Optimism => 2_000,
+            Chain::Avalanche => 2_000,
+        }
+    }
+
+    pub fn typical_gas_price_gwei(&self) -> f64 {
+        match self {
+            Chain::Ethereum => 30.0,
+            Chain::Solana => 0.000005,
+            Chain::Arbitrum => 0.1,
+            Chain::Base => 0.01,
+            Chain::Polygon => 40.0,
+            Chain::BnbChain => 3.0,
+            Chain::Optimism => 0.01,
+            Chain::Avalanche => 25.0,
+        }
+    }
+}
+
+impl fmt::Display for Chain {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Chain::Ethereum => "Ethereum",
+            Chain::Solana => "Solana",
+            Chain::Arbitrum => "Arbitrum",
+            Chain::Base => "Base",
+            Chain::Polygon => "Polygon",
+            Chain::BnbChain => "BNB Chain",
+            Chain::Optimism => "Optimism",
+            Chain::Avalanche => "Avalanche",
+        };
+        write!(f, "{}", name)
+    }
+}
+
+/// A token on a specific chain.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Token {
+    pub symbol: String,
+    pub chain: Chain,
+    pub decimals: u8,
+    pub address: String,
+}
+
