@@ -358,3 +358,93 @@ impl ScoringWeights {
             && self.speed >= 0.0
             && self.reliability >= 0.0
             && self.mev_exposure >= 0.0
+    }
+
+    pub fn normalize(&mut self) {
+        let sum = self.sum();
+        if sum > 0.0 {
+            self.fees /= sum;
+            self.slippage /= sum;
+            self.speed /= sum;
+            self.reliability /= sum;
+            self.mev_exposure /= sum;
+        }
+    }
+}
+
+impl Default for ScoringWeights {
+    fn default() -> Self {
+        Self {
+            fees: 0.25,
+            slippage: 0.25,
+            speed: 0.15,
+            reliability: 0.20,
+            mev_exposure: 0.15,
+        }
+    }
+}
+
+/// Adversarial model parameters for worst-case estimation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdversarialModel {
+    pub slippage_multiplier: f64,
+    pub gas_multiplier: f64,
+    pub bridge_delay_multiplier: f64,
+    pub mev_extraction: f64,
+    pub price_movement: f64,
+}
+
+impl Default for AdversarialModel {
+    fn default() -> Self {
+        Self {
+            slippage_multiplier: 2.0,
+            gas_multiplier: 1.5,
+            bridge_delay_multiplier: 2.0,
+            mev_extraction: 0.005,
+            price_movement: 0.02,
+        }
+    }
+}
+
+/// Statistics from a minimax search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchStats {
+    pub nodes_explored: u64,
+    pub nodes_pruned: u64,
+    pub max_depth_reached: u32,
+    pub search_time_ms: u64,
+}
+
+impl SearchStats {
+    pub fn pruning_efficiency(&self) -> f64 {
+        let total = self.nodes_explored + self.nodes_pruned;
+        if total == 0 {
+            return 0.0;
+        }
+        self.nodes_pruned as f64 / total as f64
+    }
+}
+
+/// Configuration for the router.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouterConfig {
+    pub strategy: Strategy,
+    pub slippage_tolerance: f64,
+    pub timeout_ms: u64,
+    pub max_hops: usize,
+    pub weights: ScoringWeights,
+    pub adversarial_model: AdversarialModel,
+}
+
+impl Default for RouterConfig {
+    fn default() -> Self {
+        Self {
+            strategy: Strategy::Minimax,
+            slippage_tolerance: 0.01,
+            timeout_ms: 5000,
+            max_hops: 3,
+            weights: ScoringWeights::default(),
+            adversarial_model: AdversarialModel::default(),
+        }
+    }
+}
