@@ -88,3 +88,71 @@ pub fn basis_points_to_decimal(bps: u64) -> f64 {
 /// Convert a decimal to basis points.
 /// E.g., 0.005 -> 50
 pub fn decimal_to_basis_points(decimal: f64) -> u64 {
+    (decimal * 10_000.0).round() as u64
+}
+
+/// Safely divide two f64 values, returning a default on division by zero.
+pub fn safe_divide(numerator: f64, denominator: f64) -> f64 {
+    if denominator.abs() < f64::EPSILON {
+        0.0
+    } else {
+        numerator / denominator
+    }
+}
+
+/// Linear interpolation between two values.
+pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
+    let t_clamped = clamp_f64(t, 0.0, 1.0);
+    a + (b - a) * t_clamped
+}
+
+/// Inverse linear interpolation: given a value between a and b, return t in [0, 1].
+pub fn inverse_lerp(a: f64, b: f64, value: f64) -> f64 {
+    if (b - a).abs() < f64::EPSILON {
+        return 0.0;
+    }
+    clamp_f64((value - a) / (b - a), 0.0, 1.0)
+}
+
+/// Compute the exponential moving average given old value, new value, and alpha.
+pub fn ema(old: f64, new: f64, alpha: f64) -> f64 {
+    let a = clamp_f64(alpha, 0.0, 1.0);
+    a * new + (1.0 - a) * old
+}
+
+/// Sigmoid function mapping any real to (0, 1).
+pub fn sigmoid(x: f64) -> f64 {
+    1.0 / (1.0 + (-x).exp())
+}
+
+/// Softmax over a slice, returning a new Vec of probabilities.
+pub fn softmax(values: &[f64]) -> Vec<f64> {
+    if values.is_empty() {
+        return Vec::new();
+    }
+    let max_val = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let exps: Vec<f64> = values.iter().map(|v| (v - max_val).exp()).collect();
+    let sum: f64 = exps.iter().sum();
+    if sum.abs() < f64::EPSILON {
+        return vec![1.0 / values.len() as f64; values.len()];
+    }
+    exps.iter().map(|e| e / sum).collect()
+}
+
+/// Harmonic mean of positive values.
+pub fn harmonic_mean(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let reciprocal_sum: f64 = values
+        .iter()
+        .map(|v| {
+            if v.abs() < f64::EPSILON {
+                f64::INFINITY
+            } else {
+                1.0 / v
+            }
+        })
+        .sum();
+    if reciprocal_sum.is_infinite() || reciprocal_sum.abs() < f64::EPSILON {
+        return 0.0;
