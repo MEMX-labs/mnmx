@@ -1,0 +1,11 @@
+# Default code owners
+* @MEMX-labs
+
+# Engine core
+/engine/ @MEMX-labs
+
+# TypeScript SDK
+/src/ @MEMX-labs
+
+# Python SDK
+/sdk/python/ @MEMX-labs
