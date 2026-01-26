@@ -127,3 +127,66 @@ impl MoveOrderer {
     pub fn mvv_lva_score(&self, action: &ExecutionAction, state: &OnChainState) -> f64 {
         let victim_value = self.estimate_victim_value(action, state);
         let attacker_cost = self.estimate_attacker_cost(action);
+
+        // MVV-LVA: maximize victim value, minimize attacker cost
+        victim_value - attacker_cost
+    }
+
+    /// Estimate the "value" of the target / opportunity.
+    fn estimate_victim_value(&self, action: &ExecutionAction, state: &OnChainState) -> f64 {
+        // Base value from action kind
+        let kind_value = match action.kind {
+            ActionKind::Liquidate => 80.0,
+            ActionKind::Swap => 50.0,
+            ActionKind::RemoveLiquidity => 40.0,
+            ActionKind::AddLiquidity => 30.0,
+            ActionKind::Transfer => 20.0,
+            ActionKind::Unstake => 15.0,
+            ActionKind::Stake => 10.0,
+        };
+
+        // Amount relative to our balance
+        let balance = state
+            .token_balances
+            .get(&action.token_mint)
+            .copied()
+            .unwrap_or(1) as f64;
+        let amount_ratio = (action.amount as f64 / balance).min(1.0);
+
+        // Pool size factor: bigger pools are safer
+        let pool_factor = state
+            .pool_states
+            .iter()
+            .find(|p| p.address == action.pool_address)
+            .map(|p| {
+                let tvl = p.tvl() as f64;
+                if tvl > 0.0 {
+                    (action.amount as f64 / tvl).min(1.0)
+                } else {
+                    0.5
+                }
+            })
+            .unwrap_or(0.5);
+
+        kind_value * (0.5 + amount_ratio * 0.3 + (1.0 - pool_factor) * 0.2)
+    }
+
+    /// Estimate the "cost" of executing this action.
+    fn estimate_attacker_cost(&self, action: &ExecutionAction) -> f64 {
+        // Normalize priority fee: 5000 lamports baseline = 1.0
+        let fee_cost = action.priority_fee as f64 / 5000.0;
+        // Slippage tolerance as cost
+        let slip_cost = action.slippage_bps as f64 / 100.0;
+
+        fee_cost + slip_cost
+    }
+
+    /// Return a bonus if the action matches a killer move at this depth.
+    pub fn killer_bonus(&self, action: &ExecutionAction, depth: u32) -> f64 {
+        let d = depth as usize;
+        if d >= MAX_DEPTH {
+            return 0.0;
+        }
+
+        let key = action.action_key();
+        let slots = &self.killer_moves[d];
