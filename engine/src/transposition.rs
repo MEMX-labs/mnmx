@@ -76,3 +76,73 @@ impl TranspositionTable {
             }
         }
     }
+
+    /// Store an evaluation result in the table.
+    ///
+    /// Replacement policy:
+    /// 1. If the slot is empty, insert.
+    /// 2. If the new depth >= existing depth, replace.
+    /// 3. If the existing entry is old (age difference >= 2), replace.
+    /// 4. Otherwise, keep the existing entry.
+    pub fn store(
+        &mut self,
+        hash: String,
+        depth: u32,
+        score: f64,
+        flag: TranspositionFlag,
+        best_action: Option<ExecutionAction>,
+    ) {
+        // Evict if at capacity
+        if self.table.len() >= self.max_entries && !self.table.contains_key(&hash) {
+            self.evict_oldest();
+        }
+
+        let should_replace = match self.table.get(&hash) {
+            None => true,
+            Some(existing) => {
+                if depth >= existing.depth {
+                    true
+                } else if self.current_age.saturating_sub(existing.age) >= 2 {
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        if should_replace {
+            if self.table.contains_key(&hash) {
+                self.overwrites += 1;
+            }
+            self.table.insert(
+                hash.clone(),
+                TranspositionEntry::new(hash, depth, score, flag, best_action, self.current_age),
+            );
+        }
+    }
+
+    /// Retrieve the best action stored for a position, if any.
+    pub fn get_best_action(&self, hash: &str) -> Option<&ExecutionAction> {
+        self.table
+            .get(hash)
+            .and_then(|entry| entry.best_action.as_ref())
+    }
+
+    /// Clear all entries and reset statistics.
+    pub fn clear(&mut self) {
+        self.table.clear();
+        self.hits = 0;
+        self.misses = 0;
+        self.overwrites = 0;
+        self.current_age += 1;
+    }
+
+    /// Number of entries currently stored.
+    pub fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    /// Whether the table is empty.
+    pub fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
