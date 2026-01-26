@@ -255,3 +255,61 @@ impl PositionEvaluator {
             math::clamp_f64(valid_pools as f64 / state.pool_states.len() as f64, 0.0, 1.0)
         };
         signals.push((pool_score, 2.0));
+
+        // Mempool congestion (fewer pending txs = more confident)
+        let congestion = state.pending_transactions.len() as f64;
+        let congestion_score = 1.0 / (1.0 + congestion * 0.1);
+        signals.push((congestion_score, 1.5));
+
+        // Balance information (having balance info = more confident)
+        let balance_score = if state.token_balances.is_empty() {
+            0.3
+        } else {
+            0.9
+        };
+        signals.push((balance_score, 1.0));
+
+        // Slot recency (higher slot = more recent data)
+        let slot_score = if state.slot > 0 { 0.8 } else { 0.3 };
+        signals.push((slot_score, 0.5));
+
+        math::weighted_average(&signals)
+    }
+
+    /// Find the pool that matches an action's pool_address.
+    pub fn find_pool_for_action<'a>(
+        action: &ExecutionAction,
+        pools: &'a [PoolState],
+    ) -> Option<&'a PoolState> {
+        pools.iter().find(|p| p.address == action.pool_address)
+    }
+
+    /// Wrapper around math::constant_product_swap for convenience.
+    pub fn constant_product_output(
+        amount_in: u64,
+        reserve_in: u64,
+        reserve_out: u64,
+        fee_bps: u16,
+    ) -> u64 {
+        math::constant_product_swap(amount_in, reserve_in, reserve_out, fee_bps)
+    }
+
+    /// Wrapper around math::calculate_price_impact for convenience.
+    pub fn calculate_price_impact(amount: u64, reserve_a: u64, reserve_b: u64) -> f64 {
+        math::calculate_price_impact(amount, reserve_a, reserve_b)
+    }
+
+    /// Evaluate a state without a specific action (static evaluation).
+    /// Used for terminal nodes in the game tree.
+    pub fn evaluate_static(&self, state: &OnChainState) -> f64 {
+        let total_balance = state.total_balance() as f64;
+        let pool_value: f64 = state
+            .pool_states
+            .iter()
+            .map(|p| p.tvl() as f64 * 0.001) // Our share approximation
+            .sum();
+        let pending_risk: f64 = state
+            .pending_transactions
+            .iter()
+            .map(|tx| tx.amount as f64 * 0.0001)
+            .sum();
