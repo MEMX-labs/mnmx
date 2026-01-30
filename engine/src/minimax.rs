@@ -154,3 +154,86 @@ impl MinimaxEngine {
             search_stats,
         }
     }
+
+    /// Search the root position at a specific depth, using aspiration windows.
+    fn search_root(
+        &mut self,
+        state: &OnChainState,
+        actions: &[ExecutionAction],
+        _threats: &[MevThreat],
+        depth: u32,
+        previous_score: f64,
+    ) -> (f64, Vec<ExecutionAction>) {
+        // Aspiration window: narrow alpha-beta window centered on the previous score.
+        // If the search fails low or high, re-search with a full window.
+        let (mut alpha, beta) = if depth > 1 && previous_score.is_finite() {
+            let delta = 0.5;
+            (previous_score - delta, previous_score + delta)
+        } else {
+            (f64::NEG_INFINITY, f64::INFINITY)
+        };
+
+        let mut best_score = f64::NEG_INFINITY;
+        let mut best_sequence: Vec<ExecutionAction> = Vec::new();
+
+        // Order the root moves
+        let mut sorted_actions = actions.to_vec();
+        if self.config.move_ordering_enabled {
+            self.move_orderer.order_moves(&mut sorted_actions, state, 0);
+            self.move_orderer.record_ordering_call();
+        }
+
+        // Try each action at the root
+        for action in &sorted_actions {
+            if self.should_abort() {
+                self.aborted = true;
+                break;
+            }
+
+            let new_state = GameTreeBuilder::simulate_action(state, action);
+            let state_hash = GameTreeBuilder::hash_state(&new_state);
+
+            // Build a child node for the adversary's response
+            let mut child = GameNode::new_child(
+                action.clone(),
+                state_hash.clone(),
+                1,
+                Player::Adversary,
+            );
+
+            // Evaluate the adversary's response
+            let score = self.minimax_search(
+                &mut child,
+                &new_state,
+                depth - 1,
+                -beta,
+                -alpha,
+                false, // Adversary is minimizing
+            );
+            let score = -score; // Negamax convention: negate
+
+            self.stats.record_node_visit();
+
+            if score > best_score {
+                best_score = score;
+                best_sequence = vec![action.clone()];
+
+                // Extract the principal variation
+                let pv = self.extract_pv(&child);
+                best_sequence.extend(pv);
+            }
+
+            if score > alpha {
+                alpha = score;
+            }
+
+            if self.config.alpha_beta_enabled && alpha >= beta {
+                self.stats.record_prune();
+                // Killer / history updates
+                if self.config.move_ordering_enabled {
+                    self.move_orderer.update_killer(0, action);
+                    self.move_orderer.update_history(action, depth);
+                }
+                break;
+            }
+        }
