@@ -229,3 +229,128 @@ impl<'a> PathDiscovery<'a> {
                     format!(
                         "{}->{}:{}",
                         s.from_chain.chain_id(),
+                        s.to_chain.chain_id(),
+                        s.bridge_name
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("|");
+
+            if seen.insert(key) {
+                unique.push(path);
+            }
+        }
+
+        unique
+    }
+
+    /// Get viable intermediate chains for routing between two chains.
+    pub fn get_intermediate_chains(&self, from: Chain, to: Chain) -> Vec<Chain> {
+        Chain::all()
+            .iter()
+            .filter(|&&c| {
+                c != from
+                    && c != to
+                    && self.registry.has_pair(from, c)
+                    && self.registry.has_pair(c, to)
+            })
+            .copied()
+            .collect()
+    }
+
+    /// Infer what token to use on an intermediate chain.
+    /// If the source is a stablecoin, use the same stablecoin on the intermediate chain.
+    /// Otherwise, use the native wrapped token or USDC as a fallback.
+    fn infer_intermediate_token(&self, source_token: &Token, chain: Chain) -> Token {
+        if source_token.is_stablecoin() {
+            // Use the same stablecoin on the intermediate chain
+            Token::new(
+                &source_token.symbol,
+                chain,
+                source_token.decimals,
+                &format!("0x{}_{}", source_token.symbol, chain.chain_id()),
+            )
+        } else {
+            // Use USDC as a universal intermediate
+            Token::new(
+                "USDC",
+                chain,
+                6,
+                &format!("0xUSDC_{}", chain.chain_id()),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bridge::build_mock_registry;
+
+    #[test]
+    fn test_direct_path_discovery() {
+        let registry = build_mock_registry();
+        let pd = PathDiscovery::new(&registry, 3);
+        let from = Token::new("USDC", Chain::Ethereum, 6, "0xaaa");
+        let to = Token::new("USDC", Chain::Arbitrum, 6, "0xbbb");
+        let paths = pd.expand_direct_paths(Chain::Ethereum, &from, Chain::Arbitrum, &to);
+        assert!(!paths.is_empty(), "should find at least one direct path");
+        for path in &paths {
+            assert_eq!(path.steps.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_multi_hop_discovery() {
+        let registry = build_mock_registry();
+        let pd = PathDiscovery::new(&registry, 3);
+        let from = Token::new("USDC", Chain::Ethereum, 6, "0xaaa");
+        let to = Token::new("USDC", Chain::Arbitrum, 6, "0xbbb");
+        let paths = pd.expand_multi_hop_paths(Chain::Ethereum, &from, Chain::Arbitrum, &to);
+        assert!(!paths.is_empty());
+        for path in &paths {
+            assert!(path.steps.len() >= 2);
+        }
+    }
+
+    #[test]
+    fn test_intermediate_chains() {
+        let registry = build_mock_registry();
+        let pd = PathDiscovery::new(&registry, 3);
+        let intermediates = pd.get_intermediate_chains(Chain::Ethereum, Chain::Arbitrum);
+        assert!(!intermediates.is_empty());
+        assert!(!intermediates.contains(&Chain::Ethereum));
+        assert!(!intermediates.contains(&Chain::Arbitrum));
+    }
+
+    #[test]
+    fn test_deduplication() {
+        let registry = build_mock_registry();
+        let pd = PathDiscovery::new(&registry, 3);
+        let from = Token::new("USDC", Chain::Ethereum, 6, "0xaaa");
+        let to = Token::new("USDC", Chain::Arbitrum, 6, "0xbbb");
+
+        let path = CandidatePath {
+            steps: vec![PathStep {
+                from_chain: Chain::Ethereum,
+                to_chain: Chain::Arbitrum,
+                from_token: from.clone(),
+                to_token: to.clone(),
+                bridge_name: "Wormhole".to_string(),
+            }],
+        };
+        let paths = vec![path.clone(), path.clone()];
+        let deduped = pd.deduplicate_paths(paths);
+        assert_eq!(deduped.len(), 1);
+    }
+
+    #[test]
+    fn test_full_discovery() {
+        let registry = build_mock_registry();
+        let pd = PathDiscovery::new(&registry, 2);
+        let from = Token::new("USDC", Chain::Ethereum, 6, "0xaaa");
+        let to = Token::new("USDC", Chain::Base, 6, "0xbbb");
+        let paths = pd.discover_paths(Chain::Ethereum, &from, Chain::Base, &to);
+        assert!(!paths.is_empty());
+    }
+}
