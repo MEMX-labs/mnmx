@@ -396,3 +396,97 @@ impl MinimaxEngine {
         }
 
         node.score = best_score;
+
+        // Store in transposition table
+        if self.config.transposition_enabled && !self.aborted {
+            self.transposition_table.store(
+                node.state_hash.clone(),
+                depth,
+                best_score,
+                tt_flag,
+                best_action,
+            );
+        }
+
+        best_score
+    }
+
+    /// Evaluate a leaf or terminal node.
+    fn evaluate_node(&self, state: &OnChainState, node: &GameNode) -> f64 {
+        match &node.action {
+            Some(action) => {
+                let result = self.evaluator.evaluate(state, action);
+                result.score
+            }
+            None => self.evaluator.evaluate_static(state),
+        }
+    }
+
+    /// Extract the principal variation (sequence of best moves) from a node.
+    fn extract_pv(&self, node: &GameNode) -> Vec<ExecutionAction> {
+        let mut pv = Vec::new();
+        let mut current = node;
+
+        loop {
+            if current.children.is_empty() {
+                break;
+            }
+
+            // Find the child with the best score
+            let best_child = if current.player == Player::Agent {
+                current
+                    .children
+                    .iter()
+                    .max_by(|a, b| {
+                        a.score
+                            .partial_cmp(&b.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            } else {
+                current
+                    .children
+                    .iter()
+                    .min_by(|a, b| {
+                        a.score
+                            .partial_cmp(&b.score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+            };
+
+            match best_child {
+                Some(child) => {
+                    if let Some(ref action) = child.action {
+                        pv.push(action.clone());
+                    }
+                    current = child;
+                }
+                None => break,
+            }
+        }
+
+        pv
+    }
+
+    /// Check if the search should stop before starting the next depth.
+    fn should_stop_search(&self, depth: u32) -> bool {
+        let elapsed = self.elapsed_ms();
+        self.time_manager.should_stop(elapsed, depth)
+    }
+
+    /// Check if the search should abort immediately (emergency).
+    fn should_abort(&self) -> bool {
+        let elapsed = self.elapsed_ms();
+        self.time_manager.emergency_stop(elapsed)
+    }
+
+    /// Milliseconds elapsed since search started.
+    fn elapsed_ms(&self) -> u64 {
+        self.start_time
+            .map(|t| t.elapsed().as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Access the transposition table (for testing / diagnostics).
+    pub fn transposition_table(&self) -> &TranspositionTable {
+        &self.transposition_table
+    }
