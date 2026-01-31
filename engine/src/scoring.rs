@@ -224,3 +224,79 @@ impl RouteScorer {
             _ => 0.90,
         };
 
+        // Chain-specific adjustment
+        let chain_factor = match (hop.from_chain, hop.to_chain) {
+            (crate::types::Chain::Ethereum, _) | (_, crate::types::Chain::Ethereum) => 0.99,
+            (crate::types::Chain::Solana, _) | (_, crate::types::Chain::Solana) => 0.95,
+            _ => 0.98,
+        };
+
+        base * chain_factor
+    }
+
+    /// Estimate MEV exposure for a single hop.
+    fn estimate_hop_mev(&self, hop: &RouteHop) -> f64 {
+        let value_factor = if hop.input_amount > 50_000.0 {
+            0.7
+        } else if hop.input_amount > 10_000.0 {
+            0.85
+        } else {
+            0.95
+        };
+
+        let chain_factor = match hop.from_chain {
+            crate::types::Chain::Ethereum => 0.85,
+            crate::types::Chain::BnbChain => 0.90,
+            _ => 0.95,
+        };
+
+        value_factor * chain_factor
+    }
+}
+
+/// Compare two routes by minimax score. Returns Ordering.
+pub fn compare_routes(a: &Route, b: &Route) -> std::cmp::Ordering {
+    b.minimax_score
+        .partial_cmp(&a.minimax_score)
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+/// Get scoring weights for a given strategy.
+pub fn get_strategy_weights(strategy: Strategy) -> ScoringWeights {
+    match strategy {
+        Strategy::Minimax => ScoringWeights {
+            fees: 0.25,
+            slippage: 0.25,
+            speed: 0.15,
+            reliability: 0.20,
+            mev_exposure: 0.15,
+        },
+        Strategy::Cheapest => ScoringWeights {
+            fees: 0.50,
+            slippage: 0.20,
+            speed: 0.05,
+            reliability: 0.15,
+            mev_exposure: 0.10,
+        },
+        Strategy::Fastest => ScoringWeights {
+            fees: 0.10,
+            slippage: 0.15,
+            speed: 0.50,
+            reliability: 0.15,
+            mev_exposure: 0.10,
+        },
+        Strategy::Safest => ScoringWeights {
+            fees: 0.10,
+            slippage: 0.15,
+            speed: 0.05,
+            reliability: 0.45,
+            mev_exposure: 0.25,
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Chain, Token};
+
