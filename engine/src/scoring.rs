@@ -149,3 +149,78 @@ impl RouteScorer {
     pub fn normalize_mev(&self, route: &Route) -> f64 {
         // MEV risk increases with:
         // - Number of hops (more transactions = more surface)
+        // - Value of route (larger amounts attract more MEV)
+        // - Chains involved (Ethereum mainnet has highest MEV)
+        let hop_penalty = match route.hops.len() {
+            0 => return 1.0,
+            1 => 0.05,
+            2 => 0.12,
+            3 => 0.20,
+            _ => 0.30,
+        };
+
+        let value_penalty = if route.expected_output > 100_000.0 {
+            0.15
+        } else if route.expected_output > 10_000.0 {
+            0.08
+        } else if route.expected_output > 1_000.0 {
+            0.03
+        } else {
+            0.01
+        };
+
+        let eth_mainnet_hops = route
+            .hops
+            .iter()
+            .filter(|h| {
+                h.from_chain == crate::types::Chain::Ethereum
+                    || h.to_chain == crate::types::Chain::Ethereum
+            })
+            .count();
+        let chain_penalty = eth_mainnet_hops as f64 * 0.05;
+
+        let total_penalty = hop_penalty + value_penalty + chain_penalty;
+        let score = 1.0 - total_penalty;
+        math::clamp_f64(score, 0.0, 1.0)
+    }
+
+    /// Compute aggregate slippage score for a route.
+    fn compute_route_slippage_score(&self, route: &Route) -> f64 {
+        if route.hops.is_empty() {
+            return 1.0;
+        }
+        // Compound slippage across hops
+        let mut cumulative_retention = 1.0;
+        for hop in &route.hops {
+            let hop_slippage = hop.slippage();
+            cumulative_retention *= 1.0 - hop_slippage;
+        }
+        let total_slippage = 1.0 - cumulative_retention;
+        self.normalize_slippage(total_slippage)
+    }
+
+    /// Compute aggregate reliability for a route.
+    fn compute_route_reliability(&self, route: &Route) -> f64 {
+        if route.hops.is_empty() {
+            return 1.0;
+        }
+        // Route reliability is the product of hop reliabilities
+        let mut reliability = 1.0;
+        for hop in &route.hops {
+            let hop_rel = self.estimate_hop_reliability(hop);
+            reliability *= hop_rel;
+        }
+        reliability
+    }
+
+    /// Estimate reliability for a single hop based on bridge and chains.
+    fn estimate_hop_reliability(&self, hop: &RouteHop) -> f64 {
+        // Base reliability from bridge name heuristic
+        let base = match hop.bridge.as_str() {
+            "Wormhole" => 0.97,
+            "LayerZero" => 0.98,
+            "deBridge" => 0.96,
+            "Allbridge" => 0.94,
+            _ => 0.90,
+        };
+
