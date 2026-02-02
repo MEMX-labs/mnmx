@@ -217,3 +217,121 @@ impl TranspositionTable {
 
     /// Look up a position in the table.
     pub fn lookup(&mut self, hash: u64, depth: u32, alpha: f64, beta: f64) -> Option<f64> {
+        if let Some(entry) = self.entries.get(&hash) {
+            if entry.depth >= depth {
+                self.hits += 1;
+                match entry.flag {
+                    TranspositionFlag::Exact => return Some(entry.score),
+                    TranspositionFlag::LowerBound => {
+                        if entry.score >= beta {
+                            return Some(entry.score);
+                        }
+                    }
+                    TranspositionFlag::UpperBound => {
+                        if entry.score <= alpha {
+                            return Some(entry.score);
+                        }
+                    }
+                }
+            }
+        }
+        self.misses += 1;
+        None
+    }
+
+    /// Get the best move stored for a position, if any.
+    pub fn get_best_move(&self, hash: u64) -> Option<&MoveKey> {
+        self.entries.get(&hash).and_then(|e| e.best_move.as_ref())
+    }
+
+    /// Clear the entire table.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.hits = 0;
+        self.misses = 0;
+    }
+
+    /// Hit rate of the transposition table.
+    pub fn hit_rate(&self) -> f64 {
+        let total = self.hits + self.misses;
+        if total == 0 {
+            return 0.0;
+        }
+        self.hits as f64 / total as f64
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Compute a hash for a routing state (current chain, remaining amount, hops taken).
+pub fn compute_state_hash(chain: Chain, amount: f64, depth: u32, bridges_used: &[String]) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(chain.chain_id().to_le_bytes());
+    hasher.update(amount.to_le_bytes());
+    hasher.update(depth.to_le_bytes());
+    for bridge in bridges_used {
+        hasher.update(bridge.as_bytes());
+    }
+    let hash_bytes = hasher.finalize();
+    u64::from_le_bytes(hash_bytes[0..8].try_into().unwrap_or([0; 8]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_pruning_state() {
+        let mut state = PruningState::new(4);
+        state.alpha = 0.3;
+        state.beta = 0.8;
+
+        // Maximizing: score >= beta -> prune
+        assert!(state.should_prune(0.9, true));
+        assert!(!state.should_prune(0.5, true));
+
+        // Minimizing: score <= alpha -> prune
+        assert!(state.should_prune(0.2, false));
+        assert!(!state.should_prune(0.5, false));
+    }
+
+    #[test]
+    fn test_killer_moves() {
+        let mut state = PruningState::new(4);
+        let key = MoveKey::from_chains_and_bridge(Chain::Ethereum, Chain::Arbitrum, "Wormhole");
+        state.record_killer_move(0, key.clone());
+        assert_eq!(state.killer_moves[0].len(), 1);
+        assert_eq!(state.killer_moves[0][0], key);
+    }
+
+    #[test]
+    fn test_transposition_table() {
+        let mut tt = TranspositionTable::new(1000);
+        let entry = TranspositionEntry {
+            hash: 12345,
+            depth: 3,
+            score: 0.75,
+            flag: TranspositionFlag::Exact,
+            best_move: None,
+        };
+        tt.insert(entry);
+        assert_eq!(tt.len(), 1);
+        let result = tt.lookup(12345, 2, 0.0, 1.0);
+        assert_eq!(result, Some(0.75));
+    }
+
+    #[test]
+    fn test_state_hash_deterministic() {
+        let h1 = compute_state_hash(Chain::Ethereum, 1000.0, 0, &["Wormhole".to_string()]);
+        let h2 = compute_state_hash(Chain::Ethereum, 1000.0, 0, &["Wormhole".to_string()]);
+        assert_eq!(h1, h2);
+
+        let h3 = compute_state_hash(Chain::Arbitrum, 1000.0, 0, &["Wormhole".to_string()]);
+        assert_ne!(h1, h3);
+    }
+}
