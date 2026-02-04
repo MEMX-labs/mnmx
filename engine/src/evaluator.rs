@@ -313,3 +313,88 @@ impl PositionEvaluator {
             .iter()
             .map(|tx| tx.amount as f64 * 0.0001)
             .sum();
+
+        let raw = (total_balance / 1_000_000.0) + pool_value - pending_risk;
+        math::clamp_f64(raw, -100.0, 100.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn test_state() -> OnChainState {
+        let mut balances = HashMap::new();
+        balances.insert("TokenA".to_string(), 1_000_000);
+        balances.insert("TokenB".to_string(), 2_000_000);
+
+        OnChainState {
+            token_balances: balances,
+            pool_states: vec![PoolState::new(
+                "pool1",
+                1_000_000,
+                2_000_000,
+                30,
+                "TokenA",
+                "TokenB",
+            )],
+            pending_transactions: Vec::new(),
+            slot: 100,
+            block_time: 1700000000,
+        }
+    }
+
+    fn test_swap_action() -> ExecutionAction {
+        ExecutionAction::new(
+            ActionKind::Swap,
+            "TokenA",
+            10_000,
+            "wallet1",
+            50,
+            "pool1",
+            5000,
+        )
+    }
+
+    #[test]
+    fn test_gas_cost_is_negative() {
+        let state = test_state();
+        let action = test_swap_action();
+        let gas = PositionEvaluator::evaluate_gas_cost(&action, &state);
+        assert!(gas < 0.0);
+    }
+
+    #[test]
+    fn test_slippage_is_negative_for_swap() {
+        let action = test_swap_action();
+        let pool = &test_state().pool_states[0];
+        let slip = PositionEvaluator::evaluate_slippage(&action, pool);
+        assert!(slip < 0.0);
+    }
+
+    #[test]
+    fn test_no_mev_exposure_empty_mempool() {
+        let action = test_swap_action();
+        let mev = PositionEvaluator::evaluate_mev_exposure(&action, &[]);
+        assert_eq!(mev, 0.0);
+    }
+
+    #[test]
+    fn test_confidence_range() {
+        let state = test_state();
+        let conf = PositionEvaluator::calculate_confidence(&state);
+        assert!(conf >= 0.0 && conf <= 1.0, "confidence={}", conf);
+    }
+
+    #[test]
+    fn test_evaluate_produces_result() {
+        let evaluator = PositionEvaluator::new(EvalWeights::default());
+        let state = test_state();
+        let action = test_swap_action();
+        let result = evaluator.evaluate(&state, &action);
+        assert!(result.confidence > 0.0);
+        // Score should be finite
+        assert!(result.score.is_finite());
+    }
+}
