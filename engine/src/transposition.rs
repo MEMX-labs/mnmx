@@ -246,3 +246,106 @@ mod tests {
         let result = tt.lookup("hash1", 3, f64::NEG_INFINITY, f64::INFINITY);
         assert_eq!(result, None);
     }
+
+    #[test]
+    fn test_lower_bound_cutoff() {
+        let mut tt = TranspositionTable::new(1000);
+        tt.store(
+            "hash1".to_string(),
+            3,
+            50.0,
+            TranspositionFlag::LowerBound,
+            None,
+        );
+        // beta = 40 < score = 50 => cutoff
+        let result = tt.lookup("hash1", 3, 30.0, 40.0);
+        assert_eq!(result, Some(50.0));
+        // beta = 60 > score = 50 => no cutoff
+        let result = tt.lookup("hash1", 3, 30.0, 60.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_upper_bound_cutoff() {
+        let mut tt = TranspositionTable::new(1000);
+        tt.store(
+            "hash1".to_string(),
+            3,
+            20.0,
+            TranspositionFlag::UpperBound,
+            None,
+        );
+        // alpha = 25 > score = 20 => cutoff
+        let result = tt.lookup("hash1", 3, 25.0, 40.0);
+        assert_eq!(result, Some(20.0));
+        // alpha = 15 < score = 20 => no cutoff
+        let result = tt.lookup("hash1", 3, 15.0, 40.0);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_depth_preferred_replacement() {
+        let mut tt = TranspositionTable::new(1000);
+        tt.store("h".to_string(), 5, 100.0, TranspositionFlag::Exact, None);
+        // Try to overwrite with shallower depth
+        tt.store("h".to_string(), 3, 200.0, TranspositionFlag::Exact, None);
+        let result = tt.lookup("h", 3, f64::NEG_INFINITY, f64::INFINITY);
+        // Should still have the deeper entry
+        assert_eq!(result, Some(100.0));
+    }
+
+    #[test]
+    fn test_hit_rate() {
+        let mut tt = TranspositionTable::new(1000);
+        tt.store("a".to_string(), 3, 1.0, TranspositionFlag::Exact, None);
+        tt.lookup("a", 3, f64::NEG_INFINITY, f64::INFINITY); // hit
+        tt.lookup("b", 3, f64::NEG_INFINITY, f64::INFINITY); // miss
+        assert!((tt.hit_rate() - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut tt = TranspositionTable::new(1000);
+        tt.store("a".to_string(), 3, 1.0, TranspositionFlag::Exact, None);
+        tt.store("b".to_string(), 3, 2.0, TranspositionFlag::Exact, None);
+        assert_eq!(tt.len(), 2);
+        tt.clear();
+        assert_eq!(tt.len(), 0);
+        assert_eq!(tt.hit_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_best_action_retrieval() {
+        let mut tt = TranspositionTable::new(1000);
+        let action = ExecutionAction::new(
+            ActionKind::Swap,
+            "SOL",
+            1000,
+            "USDC",
+            50,
+            "pool1",
+            5000,
+        );
+        tt.store(
+            "h".to_string(),
+            4,
+            99.0,
+            TranspositionFlag::Exact,
+            Some(action.clone()),
+        );
+        let retrieved = tt.get_best_action("h");
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().amount, 1000);
+    }
+
+    #[test]
+    fn test_capacity_eviction() {
+        let mut tt = TranspositionTable::new(3);
+        tt.store("a".to_string(), 1, 1.0, TranspositionFlag::Exact, None);
+        tt.store("b".to_string(), 2, 2.0, TranspositionFlag::Exact, None);
+        tt.store("c".to_string(), 3, 3.0, TranspositionFlag::Exact, None);
+        // Table is full, adding one more should evict
+        tt.store("d".to_string(), 4, 4.0, TranspositionFlag::Exact, None);
+        assert!(tt.len() <= 3);
+    }
+}
