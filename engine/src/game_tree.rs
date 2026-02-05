@@ -555,3 +555,164 @@ impl GameTreeBuilder {
             MevKind::Sandwich | MevKind::Frontrun | MevKind::Backrun => ActionKind::Swap,
             MevKind::JitLiquidity => ActionKind::AddLiquidity,
         };
+
+        ExecutionAction::new(
+            kind,
+            &threat.source_address,
+            threat.estimated_cost,
+            &threat.affected_pool,
+            100,
+            &threat.affected_pool,
+            10_000, // MEV bots use high priority fees
+        )
+    }
+
+    /// Estimate the cost of a sandwich attack to the agent.
+    fn estimate_sandwich_cost(action_amount: u64, pool: &PoolState) -> u64 {
+        // Sandwich profit ≈ price_impact * amount
+        let impact = math::calculate_price_impact(
+            action_amount,
+            pool.reserve_a,
+            pool.reserve_b,
+        );
+        (action_amount as f64 * impact * 2.0) as u64
+    }
+
+    /// Hash an OnChainState using SHA-256 for transposition table keys.
+    pub fn hash_state(state: &OnChainState) -> String {
+        let mut hasher = Sha256::new();
+
+        // Hash balances in sorted order for determinism
+        let mut balance_keys: Vec<&String> = state.token_balances.keys().collect();
+        balance_keys.sort();
+        for key in balance_keys {
+            hasher.update(key.as_bytes());
+            hasher.update(
+                state
+                    .token_balances
+                    .get(key)
+                    .unwrap_or(&0)
+                    .to_le_bytes(),
+            );
+        }
+
+        // Hash pool states
+        for pool in &state.pool_states {
+            hasher.update(pool.address.as_bytes());
+            hasher.update(pool.reserve_a.to_le_bytes());
+            hasher.update(pool.reserve_b.to_le_bytes());
+            hasher.update(pool.fee_rate_bps.to_le_bytes());
+        }
+
+        // Hash slot and block time
+        hasher.update(state.slot.to_le_bytes());
+        hasher.update(state.block_time.to_le_bytes());
+
+        // Hash pending transaction count and total amount
+        let pending_total: u64 = state.pending_transactions.iter().map(|t| t.amount).sum();
+        hasher.update((state.pending_transactions.len() as u64).to_le_bytes());
+        hasher.update(pending_total.to_le_bytes());
+
+        let result = hasher.finalize();
+        hex::encode(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state() -> OnChainState {
+        let mut s = OnChainState::new(100, 1700000000);
+        s.token_balances.insert("SOL".to_string(), 500_000);
+        s.token_balances.insert("USDC".to_string(), 1_000_000);
+        s.pool_states.push(PoolState::new(
+            "pool_sol_usdc",
+            10_000_000,
+            20_000_000,
+            30,
+            "SOL",
+            "USDC",
+        ));
+        s
+    }
+
+    #[test]
+    fn test_hash_deterministic() {
+        let state = make_state();
+        let h1 = GameTreeBuilder::hash_state(&state);
+        let h2 = GameTreeBuilder::hash_state(&state);
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64); // SHA-256 hex
+    }
+
+    #[test]
+    fn test_hash_changes_with_state() {
+        let s1 = make_state();
+        let mut s2 = make_state();
+        s2.slot = 200;
+        assert_ne!(
+            GameTreeBuilder::hash_state(&s1),
+            GameTreeBuilder::hash_state(&s2)
+        );
+    }
+
+    #[test]
+    fn test_simulate_swap() {
+        let state = make_state();
+        let action = ExecutionAction::new(
+            ActionKind::Swap,
+            "SOL",
+            50_000,
+            "USDC",
+            50,
+            "pool_sol_usdc",
+            5000,
+        );
+        let new_state = GameTreeBuilder::simulate_action(&state, &action);
+        // SOL balance decreased
+        assert!(
+            new_state.token_balances.get("SOL").unwrap()
+                < state.token_balances.get("SOL").unwrap()
+        );
+        // USDC balance increased
+        assert!(
+            new_state.token_balances.get("USDC").unwrap()
+                > state.token_balances.get("USDC").unwrap()
+        );
+    }
+
+    #[test]
+    fn test_generate_agent_moves() {
+        let state = make_state();
+        let moves = GameTreeBuilder::generate_agent_moves(&state);
+        assert!(!moves.is_empty());
+    }
+
+    #[test]
+    fn test_build_tree_depth_zero() {
+        let evaluator = PositionEvaluator::new(EvalWeights::default());
+        let builder = GameTreeBuilder::new(evaluator);
+        let state = make_state();
+        let tree = builder.build_tree(&state, &[], &[], 0);
+        assert!(tree.is_terminal);
+    }
+
+    #[test]
+    fn test_build_tree_has_children() {
+        let evaluator = PositionEvaluator::new(EvalWeights::default());
+        let builder = GameTreeBuilder::new(evaluator);
+        let state = make_state();
+        let actions = vec![ExecutionAction::new(
+            ActionKind::Swap,
+            "SOL",
+            50_000,
+            "USDC",
+            50,
+            "pool_sol_usdc",
+            5000,
+        )];
+        let tree = builder.build_tree(&state, &actions, &[], 2);
+        assert!(!tree.children.is_empty());
+    }
+}
