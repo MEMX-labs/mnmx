@@ -146,3 +146,86 @@ impl RiskAssessor {
         // MEV is higher on certain chains
         let chain_factor: f64 = route
             .hops
+            .iter()
+            .map(|hop| match hop.from_chain {
+                Chain::Ethereum => 1.5,
+                Chain::BnbChain => 1.2,
+                Chain::Polygon => 1.1,
+                Chain::Arbitrum => 0.8,
+                Chain::Base => 0.7,
+                Chain::Optimism => 0.7,
+                Chain::Solana => 0.6,
+                Chain::Avalanche => 0.9,
+            })
+            .sum::<f64>()
+            / route.hops.len() as f64;
+
+        base_mev * hop_multiplier * chain_factor
+    }
+
+    /// Estimate adverse price movement during route execution.
+    pub fn compute_price_impact(&self, route: &Route) -> f64 {
+        if route.hops.is_empty() {
+            return 0.0;
+        }
+
+        // Price can move against us during execution time
+        let total_time = route.estimated_time as f64;
+        // Assume price volatility scales with sqrt(time) (random walk)
+        let time_factor = (total_time / 60.0).sqrt();
+
+        // Base price movement from adversarial model
+        let base_movement = self.model.price_movement;
+
+        // Stablecoin routes have minimal price impact
+        let token_factor = if route
+            .hops
+            .iter()
+            .all(|h| h.from_token.is_stablecoin() && h.to_token.is_stablecoin())
+        {
+            0.05
+        } else {
+            1.0
+        };
+
+        let impact = base_movement * time_factor * token_factor;
+        math::clamp_f64(impact, 0.0, 0.5)
+    }
+
+    /// Classify route risk based on potential loss and complexity.
+    pub fn get_risk_level(&self, route: &Route) -> RiskLevel {
+        let assessment = self.assess_route_risk(route);
+        assessment.risk_level
+    }
+
+    // ------- Internal helpers -------
+
+    fn classify_risk(&self, loss_fraction: f64, hop_count: usize) -> RiskLevel {
+        let hop_risk_add = match hop_count {
+            1 => 0.0,
+            2 => 0.02,
+            3 => 0.05,
+            _ => 0.10,
+        };
+        let total_risk = loss_fraction + hop_risk_add;
+
+        if total_risk < 0.02 {
+            RiskLevel::Low
+        } else if total_risk < 0.05 {
+            RiskLevel::Medium
+        } else if total_risk < 0.15 {
+            RiskLevel::High
+        } else {
+            RiskLevel::Critical
+        }
+    }
+
+    fn compute_confidence(&self, route: &Route) -> f64 {
+        // Confidence decreases with hops and aggressive adversarial assumptions
+        let hop_factor = 1.0 / (1.0 + 0.15 * route.hops.len() as f64);
+        let model_factor = 1.0
+            / (1.0
+                + (self.model.slippage_multiplier - 1.0).abs()
+                + (self.model.gas_multiplier - 1.0).abs());
+        math::clamp_f64(hop_factor * model_factor, 0.0, 1.0)
+    }
