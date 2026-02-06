@@ -285,3 +285,98 @@ impl MinimaxSearcher {
         // The adversary applies worst-case perturbations to each move
         for &idx in ordering {
             let hop = &moves[idx];
+            let adversarial_hop = self.apply_adversarial_model(hop);
+            let child = self.apply_move(node, &adversarial_hop);
+
+            // After adversary, player moves again (maximizing)
+            let (score, route) = self.minimax(
+                registry,
+                &child,
+                target_chain,
+                target_token,
+                max_depth,
+                true,
+                pruning,
+                stats,
+            );
+
+            if score < best_score {
+                best_score = score;
+                best_route = route;
+            }
+
+            pruning.update_bounds(score, false);
+            if pruning.should_prune(best_score, false) {
+                stats.record_pruned();
+                pruning.record_killer_move(
+                    node.depth as usize,
+                    MoveKey::from_hop(&adversarial_hop),
+                );
+                break;
+            }
+        }
+
+        let flag = if best_score <= pruning.alpha {
+            TranspositionFlag::UpperBound
+        } else if best_score >= pruning.beta {
+            TranspositionFlag::LowerBound
+        } else {
+            TranspositionFlag::Exact
+        };
+        self.store_in_tt(state_hash, max_depth - node.depth, best_score, flag);
+
+        (best_score, best_route)
+    }
+
+    /// Evaluate a complete or partial route at a leaf node.
+    pub fn evaluate_route(&self, route: &Route) -> f64 {
+        let base_score = self.scorer.score_route(route);
+
+        // Apply risk assessment as a modifier
+        let risk_assessment = self.risk_assessor.assess_route_risk(route);
+        let risk_factor = match risk_assessment.risk_level {
+            crate::types::RiskLevel::Low => 1.0,
+            crate::types::RiskLevel::Medium => 0.85,
+            crate::types::RiskLevel::High => 0.6,
+            crate::types::RiskLevel::Critical => 0.3,
+        };
+
+        // Value retention bonus: routes that preserve more value score higher
+        let input = route.hops.first().map(|h| h.input_amount).unwrap_or(1.0);
+        let retention = if input > 0.0 {
+            route.expected_output / input
+        } else {
+            0.0
+        };
+        let retention_score = math::clamp_f64(retention, 0.0, 1.0);
+
+        // Combine base score, risk factor, and retention
+        let composite = base_score * 0.5 + retention_score * 0.3 + risk_factor * 0.2;
+        math::clamp_f64(composite, 0.0, 1.0)
+    }
+
+    /// Generate possible next hops from the current search node.
+    fn generate_moves(
+        &self,
+        registry: &BridgeRegistry,
+        node: &SearchNode,
+        target_chain: Chain,
+        target_token: &Token,
+    ) -> Vec<RouteHop> {
+        let mut moves = Vec::new();
+
+        // Try all chains reachable from the current chain
+        for &dest_chain in Chain::all() {
+            if dest_chain == node.current_chain {
+                continue;
+            }
+            // Avoid revisiting chains (no loops)
+            if node
+                .hops_taken
+                .iter()
+                .any(|h| h.from_chain == dest_chain)
+            {
+                continue;
+            }
+
+            let bridges = registry.get_bridges_for_pair(node.current_chain, dest_chain);
