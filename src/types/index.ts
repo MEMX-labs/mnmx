@@ -138,3 +138,64 @@ export interface OnChainState {
 
 /** Classification of MEV extraction strategies. */
 export type MevThreatKind = 'sandwich' | 'frontrun' | 'backrun' | 'jit';
+
+/** A detected or hypothesised MEV threat. */
+export interface MevThreat {
+  readonly kind: MevThreatKind;
+  probability: number;
+  estimatedCost: bigint;
+  readonly sourceAddress: string;
+  readonly relatedPool: string;
+  readonly description: string;
+}
+
+// ── Execution Planning ──────────────────────────────────────────────
+
+/** Statistics gathered during a minimax search invocation. */
+export interface SearchStats {
+  nodesExplored: number;
+  nodesPruned: number;
+  maxDepthReached: number;
+  timeMs: number;
+  transpositionHits: number;
+}
+
+/** The engine's recommended execution plan. */
+export interface ExecutionPlan {
+  readonly actions: ExecutionAction[];
+  readonly expectedOutcome: EvaluationResult;
+  readonly totalScore: number;
+  readonly stats: SearchStats;
+  readonly rootStateHash: string;
+}
+
+// ── Execution Results ───────────────────────────────────────────────
+
+/** Outcome of submitting a transaction to the network. */
+export interface ExecutionResult {
+  readonly success: boolean;
+  readonly signatures: string[];
+  readonly errors: string[];
+  readonly actualSlippageBps: number;
+  readonly computeUnitsUsed: number;
+  readonly totalFeeLamports: bigint;
+}
+
+/** Result of simulating a transaction before submission. */
+export interface SimulationResult {
+  readonly success: boolean;
+  readonly computeUnitsConsumed: number;
+  readonly logs: string[];
+  readonly error: string | null;
+  readonly returnData: Uint8Array | null;
+}
+
+// ── State Change (for incremental hashing) ──────────────────────────
+
+/** Describes a single mutation to on-chain state. */
+export interface StateChange {
+  readonly field: 'tokenBalance' | 'poolReserve' | 'slot';
+  readonly key: string;
+  readonly previousValue: bigint;
+  readonly newValue: bigint;
+}
