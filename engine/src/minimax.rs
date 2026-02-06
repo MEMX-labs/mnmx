@@ -380,3 +380,99 @@ impl MinimaxSearcher {
             }
 
             let bridges = registry.get_bridges_for_pair(node.current_chain, dest_chain);
+            for bridge in bridges {
+                let health = bridge.get_health();
+                if !health.online {
+                    continue;
+                }
+
+                // Determine output token
+                let to_token = if dest_chain == target_chain {
+                    target_token.clone()
+                } else {
+                    // Intermediate hop uses USDC or same token
+                    if node.current_token.is_stablecoin() {
+                        Token::new(
+                            &node.current_token.symbol,
+                            dest_chain,
+                            node.current_token.decimals,
+                            &format!("0x{}_{}", node.current_token.symbol, dest_chain.chain_id()),
+                        )
+                    } else {
+                        Token::new(
+                            "USDC",
+                            dest_chain,
+                            6,
+                            &format!("0xUSDC_{}", dest_chain.chain_id()),
+                        )
+                    }
+                };
+
+                if let Some(quote) =
+                    bridge.get_quote(&node.current_token, &to_token, node.remaining_amount)
+                {
+                    moves.push(RouteHop {
+                        from_chain: node.current_chain,
+                        to_chain: dest_chain,
+                        from_token: node.current_token.clone(),
+                        to_token: to_token,
+                        bridge: bridge.name().to_string(),
+                        input_amount: node.remaining_amount,
+                        output_amount: quote.output_amount,
+                        fee: quote.fee,
+                        estimated_time: quote.estimated_time,
+                    });
+                }
+            }
+        }
+
+        moves
+    }
+
+    /// Apply the adversarial model to a hop, computing worst-case values.
+    pub fn apply_adversarial_model(&self, hop: &RouteHop) -> RouteHop {
+        let model = &self.config.adversarial_model;
+
+        let observed_slippage = hop.slippage();
+        let worst_slippage = math::clamp_f64(
+            observed_slippage * model.slippage_multiplier,
+            0.0,
+            0.5,
+        );
+
+        let worst_fee = hop.fee * model.gas_multiplier;
+        let worst_output = hop.input_amount * (1.0 - worst_slippage) - worst_fee;
+        let worst_output = if worst_output < 0.0 { 0.0 } else { worst_output };
+
+        let mev_loss = hop.input_amount * model.mev_extraction;
+        let final_output = worst_output - mev_loss;
+        let final_output = if final_output < 0.0 { 0.0 } else { final_output };
+
+        let worst_time = (hop.estimated_time as f64 * model.bridge_delay_multiplier) as u64;
+
+        RouteHop {
+            from_chain: hop.from_chain,
+            to_chain: hop.to_chain,
+            from_token: hop.from_token.clone(),
+            to_token: hop.to_token.clone(),
+            bridge: hop.bridge.clone(),
+            input_amount: hop.input_amount,
+            output_amount: final_output,
+            fee: worst_fee,
+            estimated_time: worst_time,
+        }
+    }
+
+    // ------- Internal helpers -------
+
+    fn apply_move(&self, node: &SearchNode, hop: &RouteHop) -> SearchNode {
+        let mut new_hops = node.hops_taken.clone();
+        new_hops.push(hop.clone());
+        let mut new_bridges = node.bridges_used.clone();
+        new_bridges.push(hop.bridge.clone());
+
+        SearchNode {
+            current_chain: hop.to_chain,
+            current_token: hop.to_token.clone(),
+            remaining_amount: hop.output_amount,
+            hops_taken: new_hops,
