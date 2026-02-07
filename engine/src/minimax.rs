@@ -572,3 +572,67 @@ mod tests {
 
     #[test]
     fn test_generate_moves_no_loops() {
+        let registry = build_mock_registry();
+        let config = default_config();
+        let searcher = MinimaxSearcher::new(config);
+
+        let from = Token::new("USDC", Chain::Ethereum, 6, "0xa");
+        let to = Token::new("USDC", Chain::Arbitrum, 6, "0xb");
+
+        let node = SearchNode {
+            current_chain: Chain::Polygon,
+            current_token: Token::new("USDC", Chain::Polygon, 6, "0xp"),
+            remaining_amount: 9900.0,
+            hops_taken: vec![RouteHop {
+                from_chain: Chain::Ethereum,
+                to_chain: Chain::Polygon,
+                from_token: from.clone(),
+                to_token: Token::new("USDC", Chain::Polygon, 6, "0xp"),
+                bridge: "Wormhole".to_string(),
+                input_amount: 10000.0,
+                output_amount: 9900.0,
+                fee: 30.0,
+                estimated_time: 180,
+            }],
+            bridges_used: vec!["Wormhole".to_string()],
+            total_fees: 30.0,
+            total_time: 180,
+            depth: 1,
+        };
+
+        let moves = searcher.generate_moves(&registry, &node, Chain::Arbitrum, &to);
+        // Should not have any move back to Ethereum (already visited)
+        for m in &moves {
+            assert_ne!(
+                m.to_chain,
+                Chain::Ethereum,
+                "should not route back to already-visited chain"
+            );
+        }
+    }
+
+    #[test]
+    fn test_evaluate_route_positive() {
+        let config = default_config();
+        let searcher = MinimaxSearcher::new(config);
+
+        let mut route = Route::new();
+        route.hops.push(RouteHop {
+            from_chain: Chain::Ethereum,
+            to_chain: Chain::Arbitrum,
+            from_token: Token::new("USDC", Chain::Ethereum, 6, "0xa"),
+            to_token: Token::new("USDC", Chain::Arbitrum, 6, "0xb"),
+            bridge: "LayerZero".to_string(),
+            input_amount: 10000.0,
+            output_amount: 9980.0,
+            fee: 20.0,
+            estimated_time: 60,
+        });
+        route.expected_output = 9980.0;
+        route.total_fees = 20.0;
+        route.estimated_time = 60;
+
+        let score = searcher.evaluate_route(&route);
+        assert!(score > 0.0 && score <= 1.0, "score should be in (0, 1]: {}", score);
+    }
+}
