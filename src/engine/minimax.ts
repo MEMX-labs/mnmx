@@ -136,3 +136,124 @@ export class MinimaxEngine {
   }
 
   // ── Depth-Limited Search ────────────────────────────────────────
+
+  private searchAtDepth(
+    rootState: OnChainState,
+    actions: ExecutionAction[],
+    maxDepth: number,
+  ): { score: number; actions: ExecutionAction[]; eval: any } {
+    const ordered = this.moveOrderer.orderMoves(actions, rootState, 0);
+
+    let bestScore = -Infinity;
+    let bestAction = ordered[0]!;
+    let alpha = -Infinity;
+    const beta = Infinity;
+
+    for (const action of ordered) {
+      if (this.isTimeUp()) {
+        this.searchAborted = true;
+        break;
+      }
+
+      const nextState = this.treeBuilder.simulateAction(rootState, action);
+      const threats = this.treeBuilder.generateAdversaryMoves(nextState, action);
+
+      // Adversary's turn next, so we negate (minimax)
+      const score = -this.minimaxSearch(
+        nextState,
+        maxDepth - 1,
+        -beta,
+        -alpha,
+        false, // adversary is minimising
+        actions,
+        threats,
+      );
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestAction = action;
+      }
+
+      if (score > alpha) {
+        alpha = score;
+      }
+    }
+
+    const bestEval = this.evaluator.evaluate(rootState, bestAction);
+    return { score: bestScore, actions: [bestAction], eval: bestEval };
+  }
+
+  // ── Core Minimax with Alpha-Beta ────────────────────────────────
+
+  /**
+   * Negamax-style minimax with alpha-beta pruning.
+   *
+   * The `maximizing` parameter tracks whose perspective we evaluate
+   * from: true = agent (wants high scores), false = adversary (wants
+   * low scores for the agent, which in negamax means high for itself).
+   */
+  private minimaxSearch(
+    state: OnChainState,
+    depth: number,
+    alpha: number,
+    beta: number,
+    maximizing: boolean,
+    agentActions: ExecutionAction[],
+    adversaryThreats: MevThreat[],
+  ): number {
+    this.nodesExplored++;
+
+    // Time check every 1024 nodes to avoid overhead
+    if ((this.nodesExplored & 0x3ff) === 0 && this.isTimeUp()) {
+      this.searchAborted = true;
+      return 0;
+    }
+
+    const stateHash = this.treeBuilder.hashState(state);
+
+    // Transposition table probe
+    if (this.config.alphaBetaPruning) {
+      const ttResult = this.transpositionTable.lookup(
+        stateHash,
+        depth,
+        alpha,
+        beta,
+      );
+      if (ttResult.found) {
+        return ttResult.score;
+      }
+    }
+
+    // Leaf node – evaluate the position
+    if (depth <= 0) {
+      return this.evaluateLeaf(state, agentActions, maximizing);
+    }
+
+    let bestScore = -Infinity;
+    let bestAction: ExecutionAction | undefined;
+    let boundFlag: BoundFlag = 'upper';
+
+    if (maximizing) {
+      // Agent's turn – try each possible action
+      const ordered = this.moveOrderer.orderMoves(agentActions, state, depth);
+
+      for (const action of ordered) {
+        if (this.searchAborted) break;
+
+        const nextState = this.treeBuilder.simulateAction(state, action);
+        const threats = this.treeBuilder.generateAdversaryMoves(nextState, action);
+
+        const score = -this.minimaxSearch(
+          nextState,
+          depth - 1,
+          -beta,
+          -alpha,
+          false,
+          agentActions,
+          threats,
+        );
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestAction = action;
+        }
