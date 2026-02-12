@@ -130,3 +130,172 @@ export class PlanExecutor {
     try {
       const result = await this.connection.simulateTransaction(tx);
       const value = result.value;
+
+      return {
+        success: value.err === null,
+        computeUnitsConsumed: value.unitsConsumed ?? DEFAULT_COMPUTE_UNITS,
+        logs: value.logs ?? [],
+        error: value.err ? JSON.stringify(value.err) : null,
+        returnData: value.returnData
+          ? new Uint8Array(Buffer.from(value.returnData.data[0], 'base64'))
+          : null,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        computeUnitsConsumed: 0,
+        logs: [],
+        error: err instanceof Error ? err.message : String(err),
+        returnData: null,
+      };
+    }
+  }
+
+  // ── Private: Instruction Builders ───────────────────────────────
+
+  private createComputeBudgetInstruction(
+    units: number,
+  ): TransactionInstruction {
+    return ComputeBudgetProgram.setComputeUnitLimit({ units });
+  }
+
+  private createPriorityFeeInstruction(
+    microLamports: number,
+  ): TransactionInstruction {
+    return ComputeBudgetProgram.setComputeUnitPrice({ microLamports });
+  }
+
+  /**
+   * Build a placeholder instruction that encodes the action's intent.
+   * A production integration would invoke the actual on-chain program
+   * (e.g., Raydium, Orca, Marinade) with properly serialised args.
+   */
+  private buildActionInstruction(
+    action: ExecutionAction,
+  ): TransactionInstruction {
+    const data = Buffer.alloc(64);
+    // Encode action kind as first byte
+    const kindIndex = ACTION_KIND_INDICES[action.kind] ?? 0;
+    data.writeUInt8(kindIndex, 0);
+    // Encode amount as LE u64 at offset 8
+    data.writeBigUInt64LE(action.amount, 8);
+    // Encode slippage at offset 16
+    data.writeUInt16LE(action.slippageBps, 16);
+
+    const poolKey = safePublicKey(action.pool);
+    const mintInKey = safePublicKey(action.tokenMintIn);
+    const mintOutKey = safePublicKey(action.tokenMintOut);
+
+    return new TransactionInstruction({
+      keys: [
+        { pubkey: this.wallet.publicKey, isSigner: true, isWritable: true },
+        { pubkey: poolKey, isSigner: false, isWritable: true },
+        { pubkey: mintInKey, isSigner: false, isWritable: false },
+        { pubkey: mintOutKey, isSigner: false, isWritable: false },
+      ],
+      programId: SystemProgram.programId,
+      data,
+    });
+  }
+
+  // ── Private: Signing & Sending ──────────────────────────────────
+
+  /**
+   * Sign and send the transaction with exponential-backoff retry.
+   */
+  private async signAndSend(tx: Transaction): Promise<TransactionSignature> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        const sig = await sendAndConfirmTransaction(
+          this.connection,
+          tx,
+          [this.wallet],
+          {
+            commitment: 'confirmed',
+            maxRetries: 2,
+          },
+        );
+        return sig;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+
+        // Exponential backoff: 500ms, 1000ms, 2000ms …
+        const delay = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
+        await sleep(delay);
+
+        // Re-fetch blockhash for next attempt
+        try {
+          const { blockhash, lastValidBlockHeight } =
+            await this.connection.getLatestBlockhash();
+          tx.recentBlockhash = blockhash;
+          tx.lastValidBlockHeight = lastValidBlockHeight;
+        } catch {
+          // If blockhash fetch fails, try with old one
+        }
+      }
+    }
+
+    throw lastError ?? new Error('Transaction submission failed after retries');
+  }
+
+  /**
+   * Re-create the compute-budget instruction with actual usage plus a
+   * safety margin.
+   */
+  private adjustComputeBudget(
+    tx: Transaction,
+    simulatedUnits: number,
+  ): Transaction {
+    const adjusted = new Transaction();
+    const targetUnits = Math.ceil(simulatedUnits * 1.2); // 20% margin
+
+    // Replace the first instruction (compute budget) if present
+    let replacedBudget = false;
+    for (const ix of tx.instructions) {
+      if (
+        !replacedBudget &&
+        ix.programId.equals(ComputeBudgetProgram.programId)
+      ) {
+        adjusted.add(this.createComputeBudgetInstruction(targetUnits));
+        replacedBudget = true;
+      } else {
+        adjusted.add(ix);
+      }
+    }
+
+    adjusted.recentBlockhash = tx.recentBlockhash;
+    adjusted.lastValidBlockHeight = tx.lastValidBlockHeight;
+    adjusted.feePayer = tx.feePayer;
+
+    return adjusted;
+  }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Safely create a PublicKey, falling back to system program. */
+function safePublicKey(address: string): PublicKey {
+  try {
+    return new PublicKey(address);
+  } catch {
+    return SystemProgram.programId;
+  }
+}
+
+const ACTION_KIND_INDICES: Record<string, number> = {
+  swap: 1,
+  transfer: 2,
+  stake: 3,
+  unstake: 4,
+  liquidate: 5,
+  provide_liquidity: 6,
+  remove_liquidity: 7,
+  borrow: 8,
+  repay: 9,
+};
