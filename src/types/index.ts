@@ -319,3 +319,110 @@ export interface BridgeQuote {
   outputAmount: string;
   /** Fee amount in input token (human-readable) */
   fee: string;
+  /** Estimated time for the bridge transfer in seconds */
+  estimatedTime: number;
+  /** Available liquidity depth (human-readable) */
+  liquidityDepth: number;
+  /** When this quote expires (timestamp ms) */
+  expiresAt: number;
+  /** Slippage in basis points */
+  slippageBps: number;
+  /** Optional metadata from the bridge */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Health status of a bridge.
+ */
+export interface BridgeHealth {
+  /** Whether the bridge is currently online */
+  online: boolean;
+  /** Congestion level 0.0 (none) to 1.0 (full) */
+  congestion: number;
+  /** Recent success rate 0.0 to 1.0 */
+  recentSuccessRate: number;
+  /** Median confirmation time in seconds */
+  medianConfirmTime: number;
+  /** Last checked timestamp */
+  lastChecked: number;
+  /** Number of pending transactions */
+  pendingTxCount: number;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Execution Interfaces
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Signer interface for transaction signing.
+ */
+export interface Signer {
+  /** The signer's address */
+  address: string;
+  /** Sign and send a transaction */
+  sendTransaction(tx: TransactionRequest): Promise<string>;
+  /** Get the current chain */
+  getChainId(): Promise<number>;
+}
+
+/**
+ * Minimal transaction request.
+ */
+export interface TransactionRequest {
+  to: string;
+  data: string;
+  value?: string;
+  gasLimit?: string;
+  chainId?: number;
+}
+
+/**
+ * Progress callback data.
+ */
+export interface ProgressEvent {
+  /** Current hop index (0-based) */
+  hopIndex: number;
+  /** Total number of hops */
+  totalHops: number;
+  /** Current status */
+  status: BridgeStatus;
+  /** Transaction hash if available */
+  txHash?: string;
+  /** Human-readable message */
+  message: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
+/**
+ * Execution options.
+ */
+export interface ExecOpts {
+  /** Signer for transaction signing */
+  signer: Signer;
+  /** Progress callback */
+  onProgress?: (event: ProgressEvent) => void;
+  /** If true, simulate without executing */
+  dryRun?: boolean;
+  /** Per-hop timeout in milliseconds */
+  hopTimeout?: number;
+}
+
+/**
+ * Result of executing a route.
+ */
+export interface ExecutionResult {
+  /** Transaction hash of the first (or only) transaction */
+  txHash: string;
+  /** The route that was executed */
+  route: Route;
+  /** Actual output received (human-readable) */
+  actualOutput: string;
+  /** Total execution time in milliseconds */
+  executionTime: number;
+  /** Final status */
+  status: BridgeStatus;
+  /** Per-hop transaction hashes */
+  hopTxHashes: string[];
+  /** Error message if failed */
+  error?: string;
