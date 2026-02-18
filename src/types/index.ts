@@ -132,3 +132,83 @@ export interface RouteHop {
   /** Liquidity depth at the time of quoting */
   liquidityDepth: number;
 }
+
+/**
+ * A complete route from source to destination.
+ */
+export interface Route {
+  /** Ordered list of hops */
+  path: RouteHop[];
+  /** Expected output amount (human-readable string) */
+  expectedOutput: string;
+  /** Guaranteed minimum output after adversarial modeling */
+  guaranteedMinimum: string;
+  /** Total fees across all hops (in input token equivalent) */
+  totalFees: string;
+  /** Total estimated time in seconds */
+  estimatedTime: number;
+  /** Minimax score (higher is better) */
+  minimaxScore: number;
+  /** Strategy used to find this route */
+  strategy: Strategy;
+  /** Unique identifier for this route */
+  routeId: string;
+  /** Timestamp when this route was computed */
+  computedAt: number;
+  /** Expiry timestamp (quotes go stale) */
+  expiresAt: number;
+}
+
+/**
+ * Describes the source and destination for a route request.
+ */
+export interface RouteEndpoint {
+  /** The blockchain network */
+  chain: Chain;
+  /** Token symbol or address */
+  token: string;
+  /** Amount (only required for source) */
+  amount?: string;
+}
+
+/**
+ * A request to find a route.
+ */
+export interface RouteRequest {
+  /** Source chain, token, and amount */
+  from: RouteEndpoint & { amount: string };
+  /** Destination chain and token */
+  to: RouteEndpoint;
+  /** Optional routing configuration overrides */
+  options?: RouteOptions;
+}
+
+/**
+ * Optional overrides for route finding.
+ */
+export interface RouteOptions {
+  /** Routing strategy */
+  strategy?: Strategy;
+  /** Maximum number of hops */
+  maxHops?: number;
+  /** Slippage tolerance in basis points */
+  slippageTolerance?: number;
+  /** Timeout for route search in milliseconds */
+  timeout?: number;
+  /** Bridges to exclude */
+  excludeBridges?: string[];
+  /** Chains to exclude from intermediate hops */
+  excludeChains?: Chain[];
+  /** Minimum liquidity depth required */
+  minLiquidity?: number;
+  /** Custom scoring weights */
+  weights?: Partial<ScoringWeights>;
+  /** Custom adversarial model */
+  adversarialModel?: Partial<AdversarialModel>;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Scoring & Adversarial Model
+// ─────────────────────────────────────────────────────────────
+
+/**
