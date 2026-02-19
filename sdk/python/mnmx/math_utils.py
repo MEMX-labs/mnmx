@@ -200,3 +200,79 @@ def optimal_split(total_amount: int, pools: list["PoolState"]) -> list[int]:
             if out > best_output:
                 best_output = out
                 best_idx = i
+
+        allocations[best_idx] += current_chunk
+        ra, rb, fee = reserves[best_idx]
+        out = constant_product_output(current_chunk, ra, rb, fee)
+        reserves[best_idx] = (ra + current_chunk, rb - out, fee)
+        remaining -= current_chunk
+
+    return allocations
+
+
+def isqrt(n: int) -> int:
+    """Integer square root using Newton's method. Returns floor(sqrt(n))."""
+    if n < 0:
+        raise ValueError("isqrt is not defined for negative numbers")
+    if n == 0:
+        return 0
+    x = n
+    y = (x + 1) // 2
+    while y < x:
+        x = y
+        y = (x + n // x) // 2
+    return x
+
+
+def weighted_average(values: list[tuple[float, float]]) -> float:
+    """
+    Compute weighted average from (value, weight) pairs.
+    Returns 0.0 if total weight is zero.
+    """
+    total_weight = sum(w for _, w in values)
+    if total_weight == 0.0:
+        return 0.0
+    return sum(v * w for v, w in values) / total_weight
+
+
+def logistic(x: float, k: float = 1.0, x0: float = 0.0) -> float:
+    """Standard logistic function: 1 / (1 + exp(-k*(x - x0)))."""
+    exponent = -k * (x - x0)
+    # clamp to avoid overflow
+    exponent = max(-500.0, min(500.0, exponent))
+    return 1.0 / (1.0 + math.exp(exponent))
+
+
+def ewma(values: list[float], alpha: float = 0.1) -> list[float]:
+    """
+    Exponentially weighted moving average.
+
+    alpha in (0, 1]. Higher alpha gives more weight to recent values.
+    Returns a list the same length as the input.
+    """
+    if not values:
+        return []
+    if not (0.0 < alpha <= 1.0):
+        raise ValueError(f"alpha must be in (0, 1], got {alpha}")
+
+    result: list[float] = [values[0]]
+    for i in range(1, len(values)):
+        smoothed = alpha * values[i] + (1.0 - alpha) * result[i - 1]
+        result.append(smoothed)
+    return result
+
+
+def geometric_mean(values: list[float]) -> float:
+    """Compute the geometric mean of positive values."""
+    if not values:
+        return 0.0
+    log_sum = sum(math.log(v) for v in values if v > 0)
+    count = sum(1 for v in values if v > 0)
+    if count == 0:
+        return 0.0
+    return math.exp(log_sum / count)
+
+
+def clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp value to [lo, hi]."""
+    return max(lo, min(hi, value))
