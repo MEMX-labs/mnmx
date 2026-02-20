@@ -250,6 +250,14 @@ impl MinimaxEngine {
         (best_score, best_sequence)
     }
 
+    /// Returns true if the current search configuration supports parallel
+    /// root-level evaluation. Parallel search dispatches each root action
+    /// to a separate thread, collecting results via shared atomic bounds.
+    fn is_parallel_eligible(&self, num_actions: usize) -> bool {
+        self.config.num_threads > 1
+            && num_actions >= self.config.parallel_threshold as usize
+    }
+
     /// Recursive minimax with alpha-beta pruning (negamax formulation).
     ///
     /// `maximizing` is true when the current player is the Agent.
