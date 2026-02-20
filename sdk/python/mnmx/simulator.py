@@ -226,3 +226,112 @@ class Simulator:
                 f"MEV attack ({threat.kind.value}) caused loss of {mev_loss} tokens",
             ],
         )
+
+    def estimate_gas_cost(self, action: ExecutionAction) -> int:
+        """Estimate total gas cost in lamports for an action."""
+        base = self.config.base_gas_lamports
+        cu_price = 1  # micro-lamports per CU
+        cu_cost = (action.compute_unit_limit * cu_price) // 1_000_000
+        priority = action.priority_fee_lamports
+        return base + cu_cost + priority
+
+    def run_monte_carlo(
+        self,
+        state: OnChainState,
+        action: ExecutionAction,
+        iterations: int | None = None,
+    ) -> MonteCarloResult:
+        """
+        Run Monte Carlo simulation to model outcome distribution.
+
+        Each iteration randomizes MEV threats and mempool conditions,
+        then simulates the swap to build an output distribution.
+        """
+        n = iterations or self.config.monte_carlo_iterations
+        outputs: list[float] = []
+        mev_attack_count = 0
+        total_mev_loss = 0.0
+
+        pool = state.get_pool(action.pool_address)
+        if pool is None:
+            raise SimulationError(
+                message=f"Pool {action.pool_address} not found",
+                action_kind=action.kind.value,
+            )
+
+        reserve_in, reserve_out = self._resolve_reserves(pool, action.token_in)
+        clean_output = constant_product_output(
+            action.amount_in, reserve_in, reserve_out, pool.fee_bps
+        )
+
+        for _ in range(n):
+            threats = self._generate_random_mev_scenario(action)
+            if threats:
+                mev_attack_count += 1
+                worst_threat = max(threats, key=lambda t: t.confidence)
+                result = self.simulate_mev_attack(state, action, worst_threat)
+                actual_output = float(result.amount_out)
+                total_mev_loss += max(0.0, clean_output - actual_output)
+            else:
+                noise_factor = self._rng.gauss(1.0, 0.002)
+                actual_output = clean_output * max(0.0, noise_factor)
+
+            outputs.append(actual_output)
+
+        outputs.sort()
+
+        def percentile(data: list[float], p: float) -> float:
+            idx = max(0, min(len(data) - 1, int(len(data) * p / 100)))
+            return data[idx]
+
+        mean = sum(outputs) / len(outputs) if outputs else 0.0
+        variance = sum((x - mean) ** 2 for x in outputs) / len(outputs) if outputs else 0.0
+        std = math.sqrt(variance)
+
+        return MonteCarloResult(
+            mean_output=mean,
+            std_output=std,
+            percentile_5=percentile(outputs, 5),
+            percentile_25=percentile(outputs, 25),
+            percentile_50=percentile(outputs, 50),
+            percentile_75=percentile(outputs, 75),
+            percentile_95=percentile(outputs, 95),
+            worst_case=outputs[0] if outputs else 0.0,
+            best_case=outputs[-1] if outputs else 0.0,
+            mev_attack_probability=mev_attack_count / n if n > 0 else 0.0,
+            avg_mev_loss=total_mev_loss / n if n > 0 else 0.0,
+            iterations=n,
+            raw_outputs=outputs,
+        )
+
+    # -- internal helpers ---------------------------------------------------
+
+    def _resolve_reserves(
+        self, pool: PoolState, token_in: str
+    ) -> tuple[int, int]:
+        """Return (reserve_in, reserve_out) based on which token is being sold."""
+        if token_in == pool.token_a_mint:
+            return pool.reserve_a, pool.reserve_b
+        return pool.reserve_b, pool.reserve_a
+
+    def _apply_action_to_state(
+        self, state: OnChainState, action: ExecutionAction
+    ) -> OnChainState:
+        """
+        Apply an action to a copy of the state and return the new state.
+
+        The original state is never mutated.
+        """
+        new_state = state.model_copy(deep=True)
+
+        if action.kind != ActionKind.SWAP:
+            return new_state
+
+        pool = new_state.get_pool(action.pool_address)
+        if pool is None:
+            return new_state
+
+        reserve_in, reserve_out = self._resolve_reserves(pool, action.token_in)
+        amount_out = constant_product_output(
+            action.amount_in, reserve_in, reserve_out, pool.fee_bps
+        )
