@@ -60,3 +60,98 @@ export const CHAIN_CONFIGS: Record<Chain, ChainConfig> = {
     ],
   },
   optimism: {
+    rpc: 'https://mainnet.optimism.io',
+    blockExplorer: 'https://optimistic.etherscan.io',
+    nativeCurrency: 'ETH',
+    chainId: 10,
+    avgBlockTime: 2,
+    finalityTime: 900,
+    isEvm: true,
+    tokens: [
+      { symbol: 'ETH', chain: 'optimism', decimals: 18, address: '0x0000000000000000000000000000000000000000', name: 'Ether', isNative: true },
+      { symbol: 'USDC', chain: 'optimism', decimals: 6, address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85', name: 'USD Coin' },
+      { symbol: 'WETH', chain: 'optimism', decimals: 18, address: '0x4200000000000000000000000000000000000006', name: 'Wrapped Ether' },
+      { symbol: 'OP', chain: 'optimism', decimals: 18, address: '0x4200000000000000000000000000000000000042', name: 'Optimism' },
+    ],
+  },
+  avalanche: {
+    rpc: 'https://api.avax.network/ext/bc/C/rpc',
+    blockExplorer: 'https://snowtrace.io',
+    nativeCurrency: 'AVAX',
+    chainId: 43114,
+    avgBlockTime: 2,
+    finalityTime: 5,
+    isEvm: true,
+    tokens: [
+      { symbol: 'AVAX', chain: 'avalanche', decimals: 18, address: '0x0000000000000000000000000000000000000000', name: 'Avalanche', isNative: true },
+      { symbol: 'USDC', chain: 'avalanche', decimals: 6, address: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E', name: 'USD Coin' },
+      { symbol: 'USDT', chain: 'avalanche', decimals: 6, address: '0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7', name: 'Tether USD' },
+      { symbol: 'WETH', chain: 'avalanche', decimals: 18, address: '0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB', name: 'Wrapped Ether' },
+    ],
+  },
+};
+
+/**
+ * Get the configuration for a specific chain.
+ */
+export function getChainConfig(chain: Chain): ChainConfig {
+  const config = CHAIN_CONFIGS[chain];
+  if (!config) {
+    throw new Error(`Unknown chain: ${chain}`);
+  }
+  return config;
+}
+
+/**
+ * Check if a string is a supported chain name.
+ */
+export function isChainSupported(chain: string): chain is Chain {
+  return ALL_CHAINS.includes(chain as Chain);
+}
+
+/**
+ * Look up a chain by its numeric chain ID.
+ */
+export function getChainById(chainId: number): Chain | undefined {
+  for (const [chain, config] of Object.entries(CHAIN_CONFIGS)) {
+    if (config.chainId === chainId) return chain as Chain;
+  }
+  return undefined;
+}
+
+/**
+ * Return all supported chains.
+ */
+export function getAllChains(): Chain[] {
+  return [...ALL_CHAINS];
+}
+
+/**
+ * Get the native currency symbol for a chain.
+ */
+export function getNativeCurrency(chain: Chain): string {
+  return getChainConfig(chain).nativeCurrency;
+}
+
+/**
+ * Find a token by symbol on a given chain.
+ */
+export function findToken(chain: Chain, symbol: string): Token | undefined {
+  const config = getChainConfig(chain);
+  const tokens = config.tokens || [];
+  return tokens.find(
+    (t) => t.symbol.toLowerCase() === symbol.toLowerCase()
+  );
+}
+
+/**
+ * Get all known tokens for a chain.
+ */
+export function getChainTokens(chain: Chain): Token[] {
+  const config = getChainConfig(chain);
+  return config.tokens || [];
+}
+
+export { ETHEREUM_CONFIG, ETHEREUM_TOKENS } from './ethereum.js';
+export { SOLANA_CONFIG, SOLANA_TOKENS } from './solana.js';
+export { ARBITRUM_CONFIG, ARBITRUM_TOKENS } from './arbitrum.js';
