@@ -214,3 +214,138 @@ function evaluateAdversarial(
 function applyAdversarialToOutput(
   expectedOutput: number,
   scenario: AdversarialScenario,
+): number {
+  const slippageLoss = expectedOutput * (scenario.slippageMultiplier - 1) * 0.01;
+  const mevLoss = expectedOutput * scenario.mevExtraction;
+  const priceLoss = expectedOutput * scenario.priceMovement;
+  return Math.max(0, expectedOutput - slippageLoss - mevLoss - priceLoss);
+}
+
+/**
+ * Build a Route object from a candidate and its minimax score.
+ */
+function buildRoute(
+  candidate: CandidatePath,
+  minimaxScore: number,
+  guaranteedMinimum: number,
+  strategy: Strategy,
+): Route {
+  const hops: RouteHop[] = candidate.quotes.map((q, i) => ({
+    fromChain: candidate.chains[i],
+    toChain: candidate.chains[i + 1],
+    fromToken: candidate.tokens[i],
+    toToken: candidate.tokens[i + 1],
+    bridge: candidate.bridges[i],
+    inputAmount: q.inputAmount,
+    outputAmount: q.outputAmount,
+    fee: q.fee,
+    estimatedTime: q.estimatedTime,
+    slippageBps: q.slippageBps,
+    liquidityDepth: q.liquidityDepth,
+  }));
+
+  const lastQuote = candidate.quotes[candidate.quotes.length - 1];
+  const expectedOutput = lastQuote ? lastQuote.outputAmount : '0';
+
+  const now = Date.now();
+  return {
+    path: hops,
+    expectedOutput,
+    guaranteedMinimum: guaranteedMinimum.toFixed(6),
+    totalFees: candidate.estimatedFee.toFixed(6),
+    estimatedTime: candidate.estimatedTime,
+    minimaxScore,
+    strategy,
+    routeId: generateRouteId(candidate),
+    computedAt: now,
+    expiresAt: now + 60_000,
+  };
+}
+
+/**
+ * Generate a deterministic route ID.
+ */
+function generateRouteId(candidate: CandidatePath): string {
+  const chainStr = candidate.chains.join('-');
+  const bridgeStr = candidate.bridges.join('-');
+  const ts = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${chainStr}_${bridgeStr}_${ts}_${rand}`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// Search Algorithms
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * Run basic minimax search over candidate paths.
+ * The "maximizer" (router) picks the best route.
+ * The "minimizer" (adversary) applies worst-case conditions.
+ */
+export function minimaxSearch(
+  candidates: CandidatePath[],
+  inputAmount: number,
+  options: MinimaxOptions,
+): MinimaxResult {
+  const startTime = performance.now();
+  let nodesExplored = 0;
+  let nodesPruned = 0;
+  let maxDepthReached = 0;
+
+  const scenarios = generateScenarios(options.adversarialModel);
+  const routes: Route[] = [];
+
+  for (const candidate of candidates) {
+    nodesExplored++;
+
+    // Maximizer: evaluate at face value
+    const baseScore = evaluateCandidate(candidate, inputAmount, options.weights);
+    nodesExplored++;
+
+    // Minimizer: find the worst adversarial scenario
+    let worstScore = Infinity;
+    let worstScenario = scenarios[0];
+
+    for (const scenario of scenarios) {
+      const advScore = evaluateAdversarial(
+        candidate, inputAmount, options.weights, scenario,
+      );
+      nodesExplored++;
+      if (advScore < worstScore) {
+        worstScore = advScore;
+        worstScenario = scenario;
+      }
+    }
+    maxDepthReached = Math.max(maxDepthReached, 2);
+
+    // Minimax score: the best we can guarantee against worst-case
+    const minimaxScore = worstScore;
+
+    const lastQuote = candidate.quotes[candidate.quotes.length - 1];
+    const expectedOutput = parseFloat(lastQuote?.outputAmount ?? '0');
+    const guaranteedMinimum = applyAdversarialToOutput(expectedOutput, worstScenario);
+
+    routes.push(buildRoute(candidate, minimaxScore, guaranteedMinimum, options.strategy));
+  }
+
+  routes.sort((a, b) => b.minimaxScore - a.minimaxScore);
+
+  return {
+    bestRoute: routes[0] ?? null,
+    allRoutes: routes,
+    stats: {
+      nodesExplored,
+      nodesPruned,
+      maxDepthReached,
+      searchTimeMs: Math.round(performance.now() - startTime),
+      candidateCount: candidates.length,
+      quotesFetched: candidates.reduce((s, c) => s + c.quotes.length, 0),
+    },
+  };
+}
+
+/**
+ * Minimax search with alpha-beta pruning.
+ * Prunes branches that cannot improve on the current best guaranteed outcome.
+ */
+export function minimaxSearchWithPruning(
