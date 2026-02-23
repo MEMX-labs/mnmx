@@ -349,3 +349,193 @@ export function minimaxSearch(
  * Prunes branches that cannot improve on the current best guaranteed outcome.
  */
 export function minimaxSearchWithPruning(
+  candidates: CandidatePath[],
+  inputAmount: number,
+  options: MinimaxOptions,
+): MinimaxResult {
+  const startTime = performance.now();
+  const timeoutMs = options.timeoutMs ?? 30000;
+  let nodesExplored = 0;
+  let nodesPruned = 0;
+  let maxDepthReached = 0;
+
+  const scenarios = generateScenarios(options.adversarialModel);
+  const routes: Route[] = [];
+  let alpha = -Infinity; // best guaranteed score found so far (maximizer)
+
+  // Sort candidates by rough score descending for better pruning
+  const sorted = [...candidates].sort((a, b) => b.roughScore - a.roughScore);
+
+  for (const candidate of sorted) {
+    // Check timeout
+    if (performance.now() - startTime > timeoutMs) break;
+
+    nodesExplored++;
+
+    // Quick upper-bound estimate (no adversarial degradation)
+    const upperBound = evaluateCandidate(candidate, inputAmount, options.weights);
+    nodesExplored++;
+
+    // Alpha pruning: if best possible score cannot beat current alpha, skip
+    if (upperBound <= alpha) {
+      nodesPruned++;
+      continue;
+    }
+
+    // Full adversarial evaluation across all scenarios
+    let worstScore = Infinity;
+    let worstScenario = scenarios[0];
+    let pruned = false;
+
+    for (const scenario of scenarios) {
+      const advScore = evaluateAdversarial(
+        candidate, inputAmount, options.weights, scenario,
+      );
+      nodesExplored++;
+
+      if (advScore < worstScore) {
+        worstScore = advScore;
+        worstScenario = scenario;
+      }
+
+      // Beta pruning within adversarial search:
+      // If this scenario already makes the route worse than alpha,
+      // no need to check more scenarios (the adversary will pick this or worse)
+      if (worstScore <= alpha) {
+        nodesPruned += scenarios.length - scenarios.indexOf(scenario) - 1;
+        pruned = true;
+        break;
+      }
+    }
+
+    maxDepthReached = Math.max(maxDepthReached, 2);
+
+    // Even if pruned during scenario evaluation, record the route
+    // with its worst known score
+    const minimaxScore = worstScore;
+    alpha = Math.max(alpha, minimaxScore);
+
+    const lastQuote = candidate.quotes[candidate.quotes.length - 1];
+    const expectedOutput = parseFloat(lastQuote?.outputAmount ?? '0');
+    const guaranteedMinimum = applyAdversarialToOutput(expectedOutput, worstScenario);
+
+    routes.push(buildRoute(candidate, minimaxScore, guaranteedMinimum, options.strategy));
+  }
+
+  routes.sort((a, b) => b.minimaxScore - a.minimaxScore);
+
+  return {
+    bestRoute: routes[0] ?? null,
+    allRoutes: routes,
+    stats: {
+      nodesExplored,
+      nodesPruned,
+      maxDepthReached,
+      searchTimeMs: Math.round(performance.now() - startTime),
+      candidateCount: candidates.length,
+      quotesFetched: candidates.reduce((s, c) => s + c.quotes.length, 0),
+    },
+  };
+}
+
+/**
+ * Iterative deepening: run minimax at increasing adversarial severity.
+ * Each iteration uses a more pessimistic adversarial model,
+ * refining the guaranteed minimum progressively.
+ */
+export function iterativeDeepening(
+  candidates: CandidatePath[],
+  inputAmount: number,
+  options: MinimaxOptions,
+  maxIterations: number = 3,
+): MinimaxResult[] {
+  const results: MinimaxResult[] = [];
+
+  for (let depth = 1; depth <= maxIterations; depth++) {
+    // Each iteration scales adversarial model severity
+    const scaleFactor = 1 + (depth - 1) * 0.3;
+    const scaledModel: AdversarialModel = {
+      slippageMultiplier: options.adversarialModel.slippageMultiplier * scaleFactor,
+      gasMultiplier: options.adversarialModel.gasMultiplier * scaleFactor,
+      bridgeDelayMultiplier: options.adversarialModel.bridgeDelayMultiplier * scaleFactor,
+      mevExtraction: Math.min(options.adversarialModel.mevExtraction * scaleFactor, 0.1),
+      priceMovement: Math.min(options.adversarialModel.priceMovement * scaleFactor, 0.1),
+      failureProbability: Math.min(options.adversarialModel.failureProbability * scaleFactor, 0.2),
+    };
+
+    const depthOptions: MinimaxOptions = {
+      ...options,
+      maxDepth: depth,
+      adversarialModel: scaledModel,
+    };
+
+    const result = minimaxSearchWithPruning(candidates, inputAmount, depthOptions);
+    results.push(result);
+  }
+
+  return results;
+}
+
+/**
+ * MinimaxEngine class - wraps the functional API.
+ */
+export class MinimaxEngine {
+  private options: MinimaxOptions;
+
+  constructor(options?: Partial<MinimaxOptions>) {
+    this.options = {
+      maxDepth: options?.maxDepth ?? 3,
+      weights: options?.weights ?? DEFAULT_ROUTER_CONFIG.weights,
+      adversarialModel: options?.adversarialModel ?? DEFAULT_ROUTER_CONFIG.adversarialModel,
+      strategy: options?.strategy ?? 'minimax',
+      timeoutMs: options?.timeoutMs ?? 30000,
+    };
+  }
+
+  /**
+   * Run minimax search with alpha-beta pruning.
+   */
+  search(candidates: CandidatePath[], inputAmount: number): MinimaxResult {
+    return minimaxSearchWithPruning(candidates, inputAmount, this.options);
+  }
+
+  /**
+   * Run iterative deepening search.
+   */
+  searchIterative(
+    candidates: CandidatePath[],
+    inputAmount: number,
+    iterations?: number,
+  ): MinimaxResult {
+    const results = iterativeDeepening(
+      candidates, inputAmount, this.options, iterations,
+    );
+    // Return the result from the deepest iteration
+    return results[results.length - 1] ?? {
+      bestRoute: null,
+      allRoutes: [],
+      stats: {
+        nodesExplored: 0,
+        nodesPruned: 0,
+        maxDepthReached: 0,
+        searchTimeMs: 0,
+        candidateCount: 0,
+        quotesFetched: 0,
+      },
+    };
+  }
+
+  /**
+   * Update search options.
+   */
+  setOptions(options: Partial<MinimaxOptions>): void {
+    this.options = { ...this.options, ...options };
+  }
+
+  /**
+   * Get current options.
+   */
+  getOptions(): MinimaxOptions {
+    return { ...this.options };
+  }
+}
