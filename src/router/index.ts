@@ -323,3 +323,111 @@ export class MnmxRouter {
         });
 
         // Execute
+        const txHash = await bridge.execute(freshQuote, opts.signer);
+        hopTxHashes.push(txHash);
+
+        this._emitProgress(opts, i, route.path.length, 'confirming', txHash,
+          'Hop ' + (i + 1) + ' submitted: ' + txHash);
+
+        // Wait for confirmation
+        const hopTimeout = opts.hopTimeout ?? 300000;
+        const confirmed = await this._waitForConfirmation(bridge, txHash, hopTimeout);
+
+        if (!confirmed) {
+          lastError = 'Hop ' + (i + 1) + ' timed out waiting for confirmation';
+          currentStatus = 'failed';
+          this._emitProgress(opts, i, route.path.length, 'failed', txHash, lastError);
+          break;
+        }
+
+        currentStatus = 'completed';
+        this._emitProgress(opts, i, route.path.length, 'completed', txHash,
+          'Hop ' + (i + 1) + ' completed');
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        currentStatus = 'failed';
+        this._emitProgress(opts, i, route.path.length, 'failed', undefined, lastError);
+        break;
+      }
+    }
+
+    const executionTime = Date.now() - startTime;
+    const allCompleted = hopTxHashes.length === route.path.length && currentStatus === 'completed';
+
+    return {
+      txHash: hopTxHashes[0] ?? '',
+      route,
+      actualOutput: allCompleted ? route.expectedOutput : '0',
+      executionTime,
+      status: allCompleted ? 'completed' : currentStatus,
+      hopTxHashes,
+      error: lastError,
+    };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Private methods
+  // ─────────────────────────────────────────────────────────────
+
+  private _mergeConfig(config?: Partial<RouterConfig>): RouterConfig {
+    if (!config) return { ...DEFAULT_ROUTER_CONFIG };
+    return {
+      ...DEFAULT_ROUTER_CONFIG,
+      ...config,
+      weights: config.weights
+        ? { ...DEFAULT_ROUTER_CONFIG.weights, ...config.weights }
+        : DEFAULT_ROUTER_CONFIG.weights,
+      adversarialModel: config.adversarialModel
+        ? { ...DEFAULT_ROUTER_CONFIG.adversarialModel, ...config.adversarialModel }
+        : DEFAULT_ROUTER_CONFIG.adversarialModel,
+      chains: config.chains
+        ? { ...DEFAULT_ROUTER_CONFIG.chains, ...config.chains }
+        : DEFAULT_ROUTER_CONFIG.chains,
+    };
+  }
+
+  private _validateRequest(request: RouteRequest): void {
+    if (!request.from?.chain || !request.from?.token || !request.from?.amount) {
+      throw new Error('Invalid route request: missing from.chain, from.token, or from.amount');
+    }
+    if (!request.to?.chain || !request.to?.token) {
+      throw new Error('Invalid route request: missing to.chain or to.token');
+    }
+    if (request.from.chain === request.to.chain && request.from.token === request.to.token) {
+      throw new Error('Source and destination are the same');
+    }
+    const amount = parseFloat(request.from.amount);
+    if (isNaN(amount) || amount <= 0) {
+      throw new Error('Invalid amount: must be a positive number');
+    }
+    if (!ALL_CHAINS.includes(request.from.chain)) {
+      throw new Error('Unsupported source chain: ' + request.from.chain);
+    }
+    if (!ALL_CHAINS.includes(request.to.chain)) {
+      throw new Error('Unsupported destination chain: ' + request.to.chain);
+    }
+    if (this.registry.getAll().length === 0) {
+      throw new Error('No bridge adapters registered');
+    }
+  }
+
+  private _resolveToken(chain: Chain, tokenSymbol: string): Token {
+    const found = findToken(chain, tokenSymbol);
+    if (found) return found;
+    const isStable = ['USDC', 'USDT', 'DAI'].includes(tokenSymbol.toUpperCase());
+    return {
+      symbol: tokenSymbol.toUpperCase(),
+      chain,
+      decimals: isStable ? 6 : 18,
+      address: '0x' + chain + '_' + tokenSymbol.toLowerCase(),
+    };
+  }
+
+  private _applyStrategy(
+    strategy: Strategy,
+    candidates: CandidatePath[],
+    inputAmount: number,
+    request: RouteRequest,
+  ): MinimaxResult {
+    const weights = this._getEffectiveWeights(strategy, request);
+    const adversarialModel = {
