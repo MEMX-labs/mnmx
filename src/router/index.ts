@@ -431,3 +431,112 @@ export class MnmxRouter {
   ): MinimaxResult {
     const weights = this._getEffectiveWeights(strategy, request);
     const adversarialModel = {
+      ...this.config.adversarialModel,
+      ...(request.options?.adversarialModel ?? {}),
+    };
+
+    const searchOptions: MinimaxOptions = {
+      maxDepth: request.options?.maxHops ?? this.config.maxHops,
+      weights,
+      adversarialModel,
+      strategy,
+      timeoutMs: request.options?.timeout ?? this.config.timeout,
+    };
+
+    if (strategy === 'minimax') {
+      // Full minimax with iterative deepening
+      const idResults = iterativeDeepening(candidates, inputAmount, searchOptions, 3);
+      return idResults[idResults.length - 1] ?? {
+        bestRoute: null,
+        allRoutes: [],
+        stats: EMPTY_STATS,
+      };
+    }
+
+    // Other strategies use basic minimax with their weight presets
+    return minimaxSearchWithPruning(candidates, inputAmount, searchOptions);
+  }
+
+  private _getEffectiveWeights(strategy: Strategy, request: RouteRequest): ScoringWeights {
+    const strategyWeights = getWeightsForStrategy(strategy);
+    if (request.options?.weights) {
+      return { ...strategyWeights, ...request.options.weights };
+    }
+    return strategyWeights;
+  }
+
+  private async _waitForConfirmation(
+    bridge: BridgeAdapter,
+    txHash: string,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const start = Date.now();
+    const pollInterval = 5000;
+    while (Date.now() - start < timeoutMs) {
+      const status = await bridge.getStatus(txHash);
+      if (status === 'completed') return true;
+      if (status === 'failed') return false;
+      await new Promise<void>((resolve) => setTimeout(resolve, pollInterval));
+    }
+    return false;
+  }
+
+  private _emitProgress(
+    opts: ExecOpts,
+    hopIndex: number,
+    totalHops: number,
+    status: BridgeStatus,
+    txHash: string | undefined,
+    message: string,
+  ): void {
+    if (opts.onProgress) {
+      opts.onProgress({
+        hopIndex,
+        totalHops,
+        status,
+        txHash,
+        message,
+        timestamp: Date.now(),
+      });
+    }
+    logger.debug('[hop ' + (hopIndex + 1) + '/' + totalHops + '] ' + status + ': ' + message);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Re-exports
+// ─────────────────────────────────────────────────────────────
+
+export {
+  discoverChainPaths,
+  filterDominatedPaths,
+  buildCandidatePaths,
+  PathDiscovery,
+} from './path-discovery.js';
+
+export {
+  normalizeFee,
+  normalizeSpeed,
+  normalizeSlippage,
+  normalizeReliability,
+  normalizeMevExposure,
+  computeScore,
+  getWeightsForStrategy,
+  weightsAreValid,
+  normalizeWeights,
+  compareRoutes,
+  rankCandidates,
+  scoreRoute,
+  getScoreBreakdown,
+} from './scoring.js';
+
+export type { ScoreBreakdown } from './scoring.js';
+
+export {
+  minimaxSearch,
+  minimaxSearchWithPruning,
+  iterativeDeepening,
+  MinimaxEngine,
+} from './minimax.js';
+
+export type { MinimaxOptions, MinimaxResult } from './minimax.js';
