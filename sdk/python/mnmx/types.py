@@ -249,3 +249,111 @@ class ScoringWeights:
             mev_exposure=self.mev_exposure / t,
         )
 
+
+@dataclass
+class AdversarialModel:
+    """Parameters for adversarial / worst-case modelling."""
+
+    slippage_multiplier: float = 1.5
+    gas_multiplier: float = 1.3
+    bridge_delay_multiplier: float = 2.0
+    mev_extraction: float = 0.002  # 0.2% extracted
+    price_movement: float = 0.01  # 1% adverse move
+
+    def __post_init__(self) -> None:
+        if self.slippage_multiplier < 1.0:
+            raise ValueError("slippage_multiplier must be >= 1.0")
+        if self.gas_multiplier < 1.0:
+            raise ValueError("gas_multiplier must be >= 1.0")
+        if self.bridge_delay_multiplier < 1.0:
+            raise ValueError("bridge_delay_multiplier must be >= 1.0")
+        if self.mev_extraction < 0:
+            raise ValueError("mev_extraction must be >= 0")
+        if self.price_movement < 0:
+            raise ValueError("price_movement must be >= 0")
+
+
+@dataclass
+class RouterConfig:
+    """Configuration for the MNMX router."""
+
+    strategy: Strategy = "minimax"
+    slippage_tolerance: float = 0.005
+    timeout_ms: int = 5000
+    max_hops: int = 3
+    weights: ScoringWeights = field(default_factory=ScoringWeights)
+    adversarial_model: AdversarialModel = field(default_factory=AdversarialModel)
+
+    def __post_init__(self) -> None:
+        if self.timeout_ms < 100:
+            raise ValueError("timeout_ms must be >= 100")
+        if self.max_hops < 1 or self.max_hops > 5:
+            raise ValueError("max_hops must be in [1, 5]")
+        if not 0.0 <= self.slippage_tolerance <= 1.0:
+            raise ValueError("slippage_tolerance must be in [0, 1]")
+
+
+@dataclass
+class SimulationResult:
+    """Result from simulating a route under specific conditions."""
+
+    output: float
+    total_fees: float
+    total_time: int  # seconds
+    slippage_actual: float
+    mev_loss: float
+
+    @property
+    def net_output(self) -> float:
+        return self.output - self.mev_loss
+
+    @property
+    def total_cost(self) -> float:
+        return self.total_fees + self.mev_loss
+
+
+@dataclass
+class MonteCarloResult:
+    """Aggregated result from Monte Carlo simulation."""
+
+    mean_output: float
+    median_output: float
+    std_dev: float
+    percentile_5: float
+    percentile_95: float
+    min_output: float
+    max_output: float
+    iterations: int
+
+    @property
+    def confidence_interval_90(self) -> tuple[float, float]:
+        return (self.percentile_5, self.percentile_95)
+
+    @property
+    def downside_risk(self) -> float:
+        if self.mean_output == 0:
+            return 0.0
+        return (self.mean_output - self.percentile_5) / self.mean_output
+
+
+@dataclass
+class SearchStats:
+    """Statistics about the minimax search process."""
+
+    nodes_explored: int
+    nodes_pruned: int
+    max_depth_reached: int
+    search_time_ms: float
+
+    @property
+    def pruning_ratio(self) -> float:
+        total = self.nodes_explored + self.nodes_pruned
+        if total == 0:
+            return 0.0
+        return self.nodes_pruned / total
+
+    @property
+    def efficiency(self) -> float:
+        if self.search_time_ms == 0:
+            return 0.0
+        return self.nodes_explored / self.search_time_ms
