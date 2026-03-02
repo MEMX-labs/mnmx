@@ -125,3 +125,131 @@ def _compute_quote(
         Chain.POLYGON: 0.15,
         Chain.ARBITRUM: 0.30,
         Chain.OPTIMISM: 0.25,
+        Chain.AVALANCHE: 0.40,
+        Chain.BSC: 0.20,
+        Chain.BASE: 0.22,
+        Chain.SOLANA: 0.05,
+        Chain.FANTOM: 0.10,
+        Chain.CELO: 0.08,
+    }
+    src_mult = chain_gas_multiplier.get(from_chain, 1.0)
+    dst_mult = chain_gas_multiplier.get(to_chain, 1.0)
+    gas_fee = model.gas_cost_native * (src_mult + dst_mult) / 2.0
+
+    total_fee = protocol_fee + gas_fee
+
+    # slippage based on amount relative to liquidity
+    depth_ratio = amount / model.liquidity_pool
+    slippage = depth_ratio * 0.5  # 0.5% per 1% of pool
+    output_amount = amount - total_fee - (amount * slippage)
+    output_amount = max(output_amount, 0.0)
+
+    # speed adjustment for congestion
+    speed = int(model.speed_seconds * (1.0 + model.congestion * 0.5))
+
+    return BridgeQuote(
+        bridge=bridge_name,
+        input_amount=amount,
+        output_amount=output_amount,
+        fee=total_fee,
+        estimated_time=speed,
+        liquidity_depth=model.liquidity_pool,
+        expires_at=time.time() + 30.0,
+    )
+
+
+class WormholeBridge(BridgeAdapter):
+    """Wormhole bridge adapter."""
+
+    @property
+    def name(self) -> str:
+        return "wormhole"
+
+    @property
+    def supported_chains(self) -> list[Chain]:
+        return [
+            Chain.ETHEREUM,
+            Chain.POLYGON,
+            Chain.ARBITRUM,
+            Chain.OPTIMISM,
+            Chain.AVALANCHE,
+            Chain.BSC,
+            Chain.BASE,
+            Chain.SOLANA,
+            Chain.FANTOM,
+            Chain.CELO,
+        ]
+
+    def get_quote(
+        self,
+        from_chain: Chain,
+        to_chain: Chain,
+        from_token: str,
+        to_token: str,
+        amount: float,
+    ) -> BridgeQuote:
+        if not self.supports_pair(from_chain, to_chain):
+            raise BridgeError(self.name, "get_quote", f"Pair {from_chain}->{to_chain} not supported")
+        return _compute_quote(_FEE_MODELS["wormhole"], self.name, from_chain, to_chain, from_token, to_token, amount)
+
+    def get_health(self) -> BridgeHealth:
+        m = _FEE_MODELS["wormhole"]
+        return BridgeHealth(
+            online=True,
+            congestion=m.congestion,
+            success_rate=0.987,
+            median_confirm_time=m.speed_seconds,
+        )
+
+
+class DeBridgeBridge(BridgeAdapter):
+    """deBridge adapter."""
+
+    @property
+    def name(self) -> str:
+        return "debridge"
+
+    @property
+    def supported_chains(self) -> list[Chain]:
+        return [
+            Chain.ETHEREUM,
+            Chain.POLYGON,
+            Chain.ARBITRUM,
+            Chain.OPTIMISM,
+            Chain.AVALANCHE,
+            Chain.BSC,
+            Chain.BASE,
+            Chain.SOLANA,
+        ]
+
+    def get_quote(
+        self,
+        from_chain: Chain,
+        to_chain: Chain,
+        from_token: str,
+        to_token: str,
+        amount: float,
+    ) -> BridgeQuote:
+        if not self.supports_pair(from_chain, to_chain):
+            raise BridgeError(self.name, "get_quote", f"Pair {from_chain}->{to_chain} not supported")
+        return _compute_quote(_FEE_MODELS["debridge"], self.name, from_chain, to_chain, from_token, to_token, amount)
+
+    def get_health(self) -> BridgeHealth:
+        m = _FEE_MODELS["debridge"]
+        return BridgeHealth(
+            online=True,
+            congestion=m.congestion,
+            success_rate=0.993,
+            median_confirm_time=m.speed_seconds,
+        )
+
+
+class LayerZeroBridge(BridgeAdapter):
+    """LayerZero bridge adapter."""
+
+    @property
+    def name(self) -> str:
+        return "layerzero"
+
+    @property
+    def supported_chains(self) -> list[Chain]:
