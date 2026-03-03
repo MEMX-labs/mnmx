@@ -214,3 +214,111 @@ class MnmxRouter:
         for mid1 in intermediate_chains:
             for mid2 in intermediate_chains:
                 if mid1 == mid2:
+                    continue
+                b1s = self._registry.get_for_pair(src, mid1)
+                b2s = self._registry.get_for_pair(mid1, mid2)
+                b3s = self._registry.get_for_pair(mid2, dst)
+                for b1 in b1s:
+                    for b2 in b2s:
+                        for b3 in b3s:
+                            results.append(
+                                ([src, mid1, mid2, dst], [b1.name, b2.name, b3.name])
+                            )
+                            # limit combinatorial explosion
+                            if len(results) > 500:
+                                return results
+
+        return results
+
+    def _evaluate_path(
+        self,
+        request: RouteRequest,
+        chain_sequence: list[Chain],
+        bridge_names: list[str],
+    ) -> Route | None:
+        """Run minimax evaluation on a single candidate path."""
+        self._stats.nodes_explored += 1
+
+        hops: list[RouteHop] = []
+        current_amount = request.amount
+        total_fee = 0.0
+        total_time = 0
+        from_token = request.from_token
+
+        for i, bridge_name in enumerate(bridge_names):
+            src_chain = chain_sequence[i]
+            dst_chain = chain_sequence[i + 1]
+            to_token = request.to_token if i == len(bridge_names) - 1 else from_token
+
+            try:
+                bridge = self._registry.get(bridge_name)
+                quote = bridge.get_quote(src_chain, dst_chain, from_token, to_token, current_amount)
+            except Exception:
+                self._stats.nodes_pruned += 1
+                return None
+
+            # adversarial adjustment (MIN player moves)
+            adv = self._config.adversarial_model
+            adversarial_fee = quote.fee * adv.gas_multiplier
+            adversarial_slippage = quote.slippage * adv.slippage_multiplier
+            mev_loss = current_amount * adv.mev_extraction
+            price_impact = current_amount * adv.price_movement
+
+            worst_case_output = (
+                current_amount
+                - adversarial_fee
+                - (current_amount * adversarial_slippage)
+                - mev_loss
+                - price_impact
+            )
+            worst_case_output = max(worst_case_output, 0.0)
+
+            hop = RouteHop(
+                from_chain=src_chain,
+                to_chain=dst_chain,
+                from_token=from_token,
+                to_token=to_token,
+                bridge=bridge_name,
+                input_amount=current_amount,
+                output_amount=quote.output_amount,
+                fee=quote.fee,
+                estimated_time=int(quote.estimated_time * adv.bridge_delay_multiplier),
+            )
+            hops.append(hop)
+
+            total_fee += quote.fee
+            total_time += hop.estimated_time
+            current_amount = quote.output_amount
+            from_token = to_token
+
+        if not hops:
+            return None
+
+        self._stats.max_depth_reached = max(self._stats.max_depth_reached, len(hops))
+
+        # guaranteed minimum via minimax: apply adversarial model to expected output
+        expected_output = current_amount
+        guaranteed_minimum = self._compute_guaranteed_minimum(hops, request.amount)
+
+        route = Route(
+            path=hops,
+            expected_output=expected_output,
+            guaranteed_minimum=guaranteed_minimum,
+            total_fees=total_fee,
+            estimated_time=total_time,
+            minimax_score=0.0,  # scored later
+            strategy=request.strategy,
+        )
+        return route
+
+    def _compute_guaranteed_minimum(self, hops: list[RouteHop], initial_amount: float) -> float:
+        """Compute worst-case guaranteed output using adversarial model."""
+        adv = self._config.adversarial_model
+        amount = initial_amount
+
+        for hop in hops:
+            fee_worst = hop.fee * adv.gas_multiplier
+            slippage_worst = amount * (hop.fee / hop.input_amount) * adv.slippage_multiplier
+            mev = amount * adv.mev_extraction
+            price = amount * adv.price_movement
+            amount = amount - fee_worst - slippage_worst - mev - price
