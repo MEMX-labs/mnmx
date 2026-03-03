@@ -186,3 +186,84 @@ class RouteSimulator:
 
             # fee scaled by gas multiplier
             fee = hop.fee * ratio * conditions.gas_multiplier
+            total_fees += fee
+
+            # slippage: base slippage derived from hop's recorded loss beyond fee
+            base_slippage_amount = (hop.input_amount - hop.output_amount - hop.fee) * ratio
+            base_slippage_amount = max(base_slippage_amount, 0.0)
+            slippage_amount = base_slippage_amount * conditions.slippage_multiplier
+
+            # adjust for liquidity factor (lower liquidity -> higher slippage)
+            if conditions.liquidity_factor < 1.0 and conditions.liquidity_factor > 0:
+                liquidity_penalty = (1.0 / conditions.liquidity_factor - 1.0) * 0.01 * current_amount
+                slippage_amount += liquidity_penalty
+
+            # MEV extraction
+            mev = current_amount * conditions.mev_extraction
+            total_mev += mev
+
+            # price movement (adverse)
+            price_loss = current_amount * abs(conditions.price_movement)
+
+            current_amount = current_amount - fee - slippage_amount - mev - price_loss
+            current_amount = max(current_amount, 0.0)
+
+            # time
+            total_time += int(hop.estimated_time * conditions.bridge_delay_multiplier)
+
+        # actual slippage as fraction of initial amount
+        initial = route.path[0].input_amount
+        slippage_actual = 1.0 - (current_amount + total_fees) / initial if initial > 0 else 0.0
+
+        return SimulationResult(
+            output=current_amount,
+            total_fees=total_fees,
+            total_time=total_time,
+            slippage_actual=clamp(slippage_actual, 0.0, 1.0),
+            mev_loss=total_mev,
+        )
+
+    def _random_conditions(self, rng: random.Random) -> SimulationConditions:
+        """Sample random market conditions from realistic distributions."""
+        base = self._adversarial
+
+        # Log-normal-ish multipliers centered around the adversarial defaults
+        slip_mult = max(0.5, rng.gauss(base.slippage_multiplier, 0.4))
+        gas_mult = max(0.5, rng.gauss(base.gas_multiplier, 0.3))
+        delay_mult = max(0.5, rng.gauss(base.bridge_delay_multiplier, 0.5))
+
+        # MEV is usually zero but occasionally spikes
+        if rng.random() < 0.15:
+            mev = abs(rng.gauss(base.mev_extraction * 3, base.mev_extraction))
+        else:
+            mev = abs(rng.gauss(base.mev_extraction * 0.5, base.mev_extraction * 0.3))
+
+        # price movement: normal distribution
+        price = rng.gauss(0, base.price_movement)
+
+        # liquidity factor
+        liq = clamp(rng.gauss(0.8, 0.2), 0.1, 1.5)
+
+        return SimulationConditions(
+            slippage_multiplier=slip_mult,
+            gas_multiplier=gas_mult,
+            bridge_delay_multiplier=delay_mult,
+            mev_extraction=max(0.0, mev),
+            price_movement=price,
+            liquidity_factor=liq,
+        )
+
+    def _apply_conditions(
+        self, hop: RouteHop, conditions: SimulationConditions
+    ) -> tuple[float, float, float]:
+        """Apply conditions to a single hop, returning (output, fee, mev).
+
+        This is a convenience wrapper used internally.
+        """
+        fee = hop.fee * conditions.gas_multiplier
+        base_slip = max(hop.input_amount - hop.output_amount - hop.fee, 0.0)
+        slip = base_slip * conditions.slippage_multiplier
+        mev = hop.input_amount * conditions.mev_extraction
+        price_loss = hop.input_amount * abs(conditions.price_movement)
+        output = hop.input_amount - fee - slip - mev - price_loss
+        return max(output, 0.0), fee, mev
