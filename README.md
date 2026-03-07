@@ -200,3 +200,40 @@ Converts execution plans into Solana transactions.
 | `execute` | `(plan: ExecutionPlan) => Promise<ExecutionResult>` | Submit plan as transactions |
 | `buildTransaction` | `(action) => Transaction` | Build a single transaction |
 | `simulateTransaction` | `(tx) => Promise<SimulationResult>` | Simulate without submitting |
+
+### StateReader
+
+Fetches aggregated on-chain state from Solana RPC.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `getOnChainState` | `(wallet, pools) => Promise<OnChainState>` | Fetch aggregated state |
+| `getTokenBalances` | `(wallet) => Promise<Map<string, bigint>>` | Fetch SPL token balances |
+| `getPoolState` | `(pool) => Promise<PoolState>` | Fetch pool reserves and config |
+
+## Running Tests
+
+```bash
+npm test
+```
+
+## Building
+
+```bash
+npm run build
+```
+
+## References
+
+- Von Neumann, J. (1928). "Zur Theorie der Gesellschaftsspiele." *Mathematische Annalen*, 100(1), 295-320.
+- Shannon, C. E. (1950). "Programming a Computer for Playing Chess." *Philosophical Magazine*, 41(314).
+- Knuth, D. E. & Moore, R. W. (1975). "An Analysis of Alpha-Beta Pruning." *Artificial Intelligence*, 6(4), 293-326.
+
+## Links
+
+- Website: https://mnmx.io
+- X: https://x.com/mnmx_protocol
+
+## License
+
+[MIT](./LICENSE) -- Copyright (c) 2026 MNMX Protocol
