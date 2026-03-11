@@ -116,3 +116,140 @@ export class Logger {
   constructor(module: string) {
     this.module = module;
   }
+
+  debug(message: string, data?: Record<string, unknown>): void {
+    this.log(LogLevel.DEBUG, message, data);
+  }
+
+  info(message: string, data?: Record<string, unknown>): void {
+    this.log(LogLevel.INFO, message, data);
+  }
+
+  warn(message: string, data?: Record<string, unknown>): void {
+    this.log(LogLevel.WARN, message, data);
+  }
+
+  error(message: string, data?: Record<string, unknown>): void {
+    this.log(LogLevel.ERROR, message, data);
+  }
+
+  /**
+   * Create a child logger that inherits this logger's module prefix.
+   * The child module is formatted as "parent:child".
+   */
+  child(subModule: string): Logger {
+    return new Logger(`${this.module}:${subModule}`);
+  }
+
+  /**
+   * Check whether a given log level would be emitted by this logger.
+   * Useful to avoid expensive string formatting for debug messages.
+   */
+  isEnabled(level: LogLevel): boolean {
+    return this.getEffectiveLevel() <= level;
+  }
+
+  // ── Private ────────────────────────────────────────────────────────
+
+  private log(
+    level: LogLevel,
+    message: string,
+    data?: Record<string, unknown>,
+  ): void {
+    if (level < this.getEffectiveLevel()) return;
+
+    const entry: LogEntry = {
+      timestamp: this.formatTimestamp(),
+      level,
+      module: this.module,
+      message,
+      data,
+    };
+
+    // Buffer
+    if (logBuffer.length >= maxBufferSize) {
+      logBuffer.shift();
+    }
+    logBuffer.push(entry);
+
+    // Console output
+    if (consoleEnabled) {
+      this.writeToConsole(entry);
+    }
+  }
+
+  private getEffectiveLevel(): LogLevel {
+    // Check exact module match first
+    const override = moduleOverrides.get(this.module);
+    if (override !== undefined) return override;
+
+    // Check parent module prefixes (e.g., "engine" matches "engine:minimax")
+    const parts = this.module.split(':');
+    for (let i = parts.length - 1; i >= 1; i--) {
+      const prefix = parts.slice(0, i).join(':');
+      const parentOverride = moduleOverrides.get(prefix);
+      if (parentOverride !== undefined) return parentOverride;
+    }
+
+    return globalMinLevel;
+  }
+
+  private formatTimestamp(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${ms}`;
+  }
+
+  private writeToConsole(entry: LogEntry): void {
+    const levelLabel = LEVEL_LABELS[entry.level];
+    const prefix = `[${entry.timestamp}] ${levelLabel} [${entry.module}]`;
+
+    let line = `${prefix} ${entry.message}`;
+
+    if (entry.data !== undefined && Object.keys(entry.data).length > 0) {
+      const pairs = Object.entries(entry.data)
+        .map(([k, v]) => `${k}=${formatValue(v)}`)
+        .join(' ');
+      line += ` | ${pairs}`;
+    }
+
+    switch (entry.level) {
+      case LogLevel.ERROR:
+        console.error(line);
+        break;
+      case LogLevel.WARN:
+        console.warn(line);
+        break;
+      case LogLevel.DEBUG:
+        console.debug(line);
+        break;
+      default:
+        console.log(line);
+        break;
+    }
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function formatValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'bigint') return `${value}n`;
+  if (typeof value === 'boolean') return String(value);
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
