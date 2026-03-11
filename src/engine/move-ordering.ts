@@ -109,3 +109,68 @@ export class MoveOrderer {
     if (killers?.includes(key)) {
       score += 50_000;
     }
+
+    // 2. History heuristic
+    const historyVal = this.historyScores.get(key) ?? 0;
+    score += Math.min(historyVal, 30_000); // cap to avoid domination
+
+    // 3. MVV-LVA adapted for DeFi
+    score += this.mvvLvaScore(action, state);
+
+    // 4. Explicit priority hint from the action itself
+    score += action.priority * 100;
+
+    return score;
+  }
+
+  /**
+   * MVV-LVA: favour actions that extract the most value (large amounts
+   * through liquid pools) with the least cost (low slippage, low gas).
+   *
+   * "Victim" = value captured (swap output, liquidation bonus, etc.)
+   * "Aggressor" = cost to execute (slippage + fees)
+   */
+  private mvvLvaScore(action: ExecutionAction, state: OnChainState): number {
+    // Approximate "victim value" from the action amount
+    const amountScore = amountMagnitude(action.amount);
+
+    // Approximate "aggressor cost" from slippage setting
+    const costPenalty = action.slippageBps / 10; // higher slippage = more cost
+
+    // Pool liquidity bonus – deeper pools get a boost
+    const pool = state.poolStates.get(action.pool);
+    let liquidityBonus = 0;
+    if (pool) {
+      const totalReserves = Number(pool.reserveA + pool.reserveB);
+      liquidityBonus = Math.min(Math.log10(totalReserves + 1) * 500, 5_000);
+    }
+
+    // Action-kind weighting – some kinds are inherently more valuable
+    const kindWeight = ACTION_KIND_WEIGHTS[action.kind] ?? 1;
+
+    return (amountScore * kindWeight + liquidityBonus) - costPenalty;
+  }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+/** Map action amount to a bounded score using log scale. */
+function amountMagnitude(amount: bigint): number {
+  if (amount <= 0n) return 0;
+  // Use string length as a fast proxy for log10
+  const digits = amount.toString().length;
+  return digits * 1_000;
+}
+
+/** Relative importance of each action kind for move ordering. */
+const ACTION_KIND_WEIGHTS: Record<string, number> = {
+  liquidate: 3,
+  swap: 2,
+  provide_liquidity: 1.5,
+  remove_liquidity: 1.5,
+  stake: 1.2,
+  unstake: 1.2,
+  transfer: 1,
+  borrow: 1.3,
+  repay: 1.1,
+};
