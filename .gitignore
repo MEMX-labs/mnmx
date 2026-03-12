@@ -33,9 +33,3 @@ npm-debug.log*
 # Logs
 logs/
 *.log
-
-# Rust
-Cargo.lock
-target/
-__pycache__/
-.pytest_cache/
