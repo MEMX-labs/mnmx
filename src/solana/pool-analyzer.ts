@@ -480,3 +480,66 @@ export class PoolAnalyzer {
     return currentAmount - inputAmount;
   }
 }
+
+// ── Pool Health Monitoring ────────────────────────────────────────────
+
+export interface PoolHealthReport {
+  readonly address: string;
+  readonly isHealthy: boolean;
+  readonly liquidityScore: number;   // 0-100
+  readonly imbalanceRatio: number;   // 1.0 = perfectly balanced
+  readonly depthScore: number;       // 0-100, based on 1% impact depth
+  readonly warnings: string[];
+}
+
+/**
+ * Evaluates pool health metrics for a set of analyzed pools.
+ * Useful for filtering out unhealthy pools before routing.
+ */
+export function assessPoolHealth(
+  pools: readonly PoolAnalysis[],
+  minLiquidityThreshold: bigint = 1_000_000n,
+): PoolHealthReport[] {
+  return pools.map((pool) => {
+    const warnings: string[] = [];
+
+    // Liquidity score: log-scale of TVL relative to threshold
+    const tvlRatio = Number(pool.totalValueLocked) / Number(minLiquidityThreshold);
+    const liquidityScore = Math.min(100, Math.max(0, Math.log10(tvlRatio + 1) * 50));
+
+    if (tvlRatio < 1) {
+      warnings.push('TVL below minimum liquidity threshold');
+    }
+
+    // Imbalance: ratio of larger reserve to smaller reserve
+    const rA = Number(pool.reserveA);
+    const rB = Number(pool.reserveB);
+    const imbalanceRatio = rA > rB
+      ? rA / Math.max(rB, 1)
+      : rB / Math.max(rA, 1);
+
+    if (imbalanceRatio > 10) {
+      warnings.push('Severe reserve imbalance detected');
+    } else if (imbalanceRatio > 3) {
+      warnings.push('Moderate reserve imbalance');
+    }
+
+    // Depth score: based on 1% impact depth relative to TVL
+    const depth1PctA = Number(pool.depth.depthA1Pct);
+    const depthRatio = depth1PctA / Math.max(rA, 1);
+    const depthScore = Math.min(100, depthRatio * 1000);
+
+    const isHealthy = liquidityScore >= 30
+      && imbalanceRatio < 10
+      && warnings.length <= 1;
+
+    return {
+      address: pool.address,
+      isHealthy,
+      liquidityScore: Math.round(liquidityScore * 10) / 10,
+      imbalanceRatio: Math.round(imbalanceRatio * 100) / 100,
+      depthScore: Math.round(depthScore * 10) / 10,
+      warnings,
+    };
+  });
+}
