@@ -363,6 +363,10 @@ pub struct SearchConfig {
     pub eval_weights: EvalWeights,
     pub transposition_enabled: bool,
     pub move_ordering_enabled: bool,
+    /// Number of threads for parallel root-level search. 1 = sequential.
+    pub num_threads: u32,
+    /// Minimum branching factor before parallel search kicks in.
+    pub parallel_threshold: u32,
 }
 
 impl Default for SearchConfig {
@@ -374,6 +378,8 @@ impl Default for SearchConfig {
             eval_weights: EvalWeights::default(),
             transposition_enabled: true,
             move_ordering_enabled: true,
+            num_threads: 1,
+            parallel_threshold: 4,
         }
     }
 }

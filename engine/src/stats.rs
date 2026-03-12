@@ -146,6 +146,20 @@ impl SearchStatistics {
             self.tt_hits as f64 / total as f64
         }
     }
+
+    /// Merge statistics from a parallel worker thread into this instance.
+    /// Used when parallel root search dispatches actions to separate threads.
+    pub fn merge(&mut self, other: &SearchStatistics) {
+        self.nodes_visited += other.nodes_visited;
+        self.nodes_pruned += other.nodes_pruned;
+        self.tt_hits += other.tt_hits;
+        self.tt_misses += other.tt_misses;
+        self.total_children_generated += other.total_children_generated;
+        self.total_interior_nodes += other.total_interior_nodes;
+        if other.max_depth_reached > self.max_depth_reached {
+            self.max_depth_reached = other.max_depth_reached;
+        }
+    }
 }
 
 impl Default for SearchStatistics {
