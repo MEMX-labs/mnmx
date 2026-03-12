@@ -71,6 +71,11 @@ impl PositionEvaluator {
     /// Only Swap, AddLiquidity, and RemoveLiquidity are pool-interactive;
     /// other action kinds incur zero slippage.
     pub fn evaluate_slippage(action: &ExecutionAction, pool: &PoolState) -> f64 {
+        // Guard: zero reserves or zero amount produce no slippage
+        if pool.reserve_a == 0 || pool.reserve_b == 0 || action.amount == 0 {
+            return 0.0;
+        }
+
         match action.kind {
             ActionKind::Swap => {
                 let is_a_to_b = action.token_mint == pool.token_a_mint;
@@ -79,14 +84,20 @@ impl PositionEvaluator {
                 } else {
                     (pool.reserve_b, pool.reserve_a)
                 };
+
+                // Clamp input to reserve size to prevent nonsensical slippage values
+                let clamped_amount = action.amount.min(reserve_in);
+
                 let slippage = math::calculate_slippage(
-                    action.amount,
+                    clamped_amount,
                     reserve_in,
                     reserve_out,
                     pool.fee_rate_bps,
                 );
-                // Scale: 1% slippage => -1.0
-                -(slippage * 100.0)
+
+                // Bound: slippage score should not exceed -10.0 (100% slippage cap)
+                let score = -(slippage * 100.0);
+                score.max(-10.0)
             }
             ActionKind::AddLiquidity | ActionKind::RemoveLiquidity => {
                 let impact = math::calculate_price_impact(
@@ -94,7 +105,8 @@ impl PositionEvaluator {
                     pool.reserve_a,
                     pool.reserve_b,
                 );
-                -(impact * 50.0) // Liquidity ops have reduced slippage concern
+                let score = -(impact * 50.0);
+                score.max(-5.0) // Cap liquidity slippage penalty
             }
             _ => 0.0,
         }
