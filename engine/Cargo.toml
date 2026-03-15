@@ -7,7 +7,7 @@ description = "MNMX cross-chain routing engine using minimax search"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-thiserror = "1"
+thiserror = "2"
 log = "0.4"
 rand = "0.8"
 sha2 = "0.10"
