@@ -1,98 +1,91 @@
-# Minimax Algorithm
+# Search Algorithm
 
-## Chess-Routing Structural Isomorphism
+## The Multi-Hop Routing Problem
 
-Cross-chain routing and chess share a common structure:
+Cross-chain routing is a **constrained combinatorial search** problem. Given a source chain, destination chain, and token amount, the engine must find the best path through a graph of chains and bridges.
 
-| Chess                     | Cross-chain routing                        |
-|---------------------------|--------------------------------------------|
-| Board position            | Current token holdings on a chain          |
-| Legal moves               | Available bridges from the current chain   |
-| Opponent's response       | Adversarial conditions (slippage, MEV)     |
-| Game tree                 | All possible route combinations            |
-| Evaluation function       | 5-dimensional route scoring                |
-| Minimax value             | Best guaranteed minimum outcome            |
-| Alpha-beta pruning        | Skip routes that can't beat the current best|
+The graph is dense: 8 chains × 4 bridges × up to 3 hops = thousands of candidate paths. Each path has multiple dimensions to optimize (cost, speed, reliability, slippage, MEV risk), and these dimensions interact non-linearly across hops — the output of hop 1 is the input to hop 2, so fees and slippage compound.
 
-The key insight: in chess, you assume the opponent plays optimally against you.
-In routing, you assume the market acts adversarially (slippage spikes, MEV
-extracts value, gas surges, bridges slow down). Minimax finds the route where
-even the worst-case outcome is best.
+The core challenge: **conditions at each hop are uncertain**. Bridge liquidity shifts, gas prices spike, and slippage varies. A route that looks optimal under current conditions may perform poorly when conditions change between quoting and execution.
 
-## Why Minimax (Not Greedy or Expected Value)
+## Worst-Case Optimization
 
-### Greedy selection
+Instead of ranking routes by expected outcome, MNMX applies an **adversarial model** at each hop independently and selects the route with the best guaranteed minimum.
 
-A greedy algorithm picks the cheapest/fastest bridge at each hop independently.
-This fails because:
-- Hop 1's cheapest bridge may route through a chain where hop 2 has no good
-  options.
-- Local optimality does not guarantee global optimality in multi-hop routes.
+This is structurally similar to minimax search in game theory: maximize the minimum outcome under adversarial conditions. The "adversary" isn't a literal opponent — it's a model of how market conditions can degrade between quote time and execution time.
 
-### Expected value optimization
+### Why not expected value?
 
-Expected value averages over outcomes weighted by probability. This fails
-because:
-- Tail risks in DeFi are fat-tailed, not normally distributed.
-- Bridge failures, MEV, and gas spikes are correlated (they all worsen during
-  high volatility).
-- A route with 98% chance of +2% and 2% chance of -50% has positive expected
-  value but catastrophic tail risk.
+Expected value optimization averages over outcomes weighted by probability. This fails for cross-chain routing because:
 
-### Minimax
+- **Tail risks are correlated.** Bridge failures, MEV extraction, and gas spikes all worsen during high volatility — precisely when you need routing to be reliable.
+- **Fat-tailed distributions.** A route with 98% chance of +2% and 2% chance of -50% has positive expected value but catastrophic tail risk.
+- **Multi-hop compounding.** Uncertainty compounds across hops. A 2-hop route with 5% uncertainty per hop has ~10% total uncertainty, not 5%.
 
-Minimax asks: "What is the best outcome I can guarantee, assuming the worst
-case at every step?" This is the right question for users who care about
-the minimum amount they will receive.
+### Why not greedy selection?
 
-## Algorithm Walkthrough
+A greedy algorithm picks the best bridge at each hop independently. This fails because:
 
-### Basic minimax
+- Hop 1's cheapest bridge may route through a chain where hop 2 has poor liquidity or no bridge to the destination.
+- Local optimality does not guarantee global optimality when hops interact.
+
+## Algorithm
+
+### Search tree construction
+
+The engine builds a tree where:
+- **Root**: Source chain with input amount
+- **Level 1**: All bridges from the source chain (direct paths)
+- **Level 2**: All bridges from intermediate chains reached via Level 1 (2-hop paths)
+- **Level 3**: All bridges from Level 2 chains to the destination (3-hop paths)
+- **Leaves**: Destination chain with output amount after all hops
+
+Each path from root to leaf is a candidate route.
+
+### Adversarial evaluation
+
+At each hop, the adversarial model applies worst-case multipliers:
 
 ```
-function minimax(candidates, inputAmount, options):
-  bestScore = -infinity
-  bestRoute = null
-
-  for each candidate in candidates:
-    // Maximizer: evaluate at face value
-    baseScore = evaluate(candidate, inputAmount, weights)
-
-    // Minimizer: apply adversarial model
-    adversarialScore = evaluateAdversarial(
-      candidate, inputAmount, weights, adversarialModel
-    )
-
-    // Minimax score = guaranteed minimum
-    minimaxScore = adversarialScore
-
-    if minimaxScore > bestScore:
-      bestScore = minimaxScore
-      bestRoute = buildRoute(candidate, minimaxScore)
-
-  return bestRoute
+hop_output = quoted_output * (1 - slippage * slippageMultiplier)
+                           - gas_cost * gasMultiplier
+                           - amount * mevExtraction
 ```
 
-### With alpha-beta pruning
+These multipliers model how conditions degrade between quote and execution:
+
+| Parameter | Default | Models |
+|-----------|---------|--------|
+| `slippageMultiplier` | 2.0x | Liquidity drops, slippage doubles |
+| `gasMultiplier` | 1.5x | Gas price surges 50% |
+| `bridgeDelayMultiplier` | 3.0x | Bridge congestion, 3x slower |
+| `mevExtraction` | 0.3% | Sandwich attack on destination |
+| `priceMovement` | 0.5% | Price moves against you during transfer |
+
+The adversarial score represents the guaranteed minimum output under these conditions.
+
+### Alpha-beta pruning
+
+With thousands of candidate paths, evaluating every leaf is wasteful. Alpha-beta pruning eliminates branches that cannot influence the result:
 
 ```
-function minimaxWithPruning(candidates, inputAmount, options):
+function search(candidates, inputAmount, weights, adversarialModel):
   alpha = -infinity   // best guaranteed score found so far
   routes = []
 
-  // Sort candidates by rough score descending (better pruning)
-  sortedCandidates = sortByRoughScore(candidates)
+  // Sort by rough score descending for better pruning
+  sortedCandidates = sortByQuickEstimate(candidates)
 
   for each candidate in sortedCandidates:
-    // Quick upper-bound estimate (face-value evaluation)
+    // Quick upper-bound: face-value score without adversarial model
     upperBound = evaluate(candidate, inputAmount, weights)
 
-    // Prune: if best possible score can't beat alpha
+    // Prune: if best possible score can't beat current alpha
     if upperBound <= alpha:
       nodesPruned++
       continue
 
-    // Full adversarial evaluation
+    // Full adversarial evaluation (expensive)
     adversarialScore = evaluateAdversarial(
       candidate, inputAmount, weights, adversarialModel
     )
@@ -103,42 +96,28 @@ function minimaxWithPruning(candidates, inputAmount, options):
   return sortByScore(routes)
 ```
 
-## Alpha-Beta Pruning Explanation
+**Key insight**: Sorting candidates by rough score before search means the first evaluated candidate likely has a high score, setting alpha high immediately. Subsequent weaker candidates are pruned without full evaluation.
 
-Alpha-beta pruning eliminates branches of the search tree that cannot
-influence the final result.
+In practice:
+- Without pruning: evaluate all N candidates → O(N) full evaluations
+- With pruning: ~30-50% of candidates pruned → significant speedup for large candidate sets
 
-**Alpha** tracks the best score the maximizer (user) can guarantee so far.
-When evaluating a new candidate:
+### Transposition table
 
-1. Compute an **upper bound** (face-value score without adversarial model).
-2. If the upper bound is less than or equal to alpha, the candidate cannot
-   possibly beat the current best even in the best case. Skip it.
-3. Otherwise, compute the full adversarial score and update alpha if better.
-
-### Pruning effectiveness
-
-Sorting candidates by rough score before search maximizes pruning. If the
-first candidate evaluated has a high score, alpha starts high and subsequent
-weaker candidates are pruned immediately.
-
-In practice, with N candidates sorted by rough score:
-- Without pruning: 3N nodes explored (base + adversarial per candidate).
-- With pruning: ~N + 2K nodes, where K is the number of candidates that
-  survive pruning. Typically K << N.
+Multi-hop routes often share intermediate states. For example, both "ETH→Arbitrum→Solana" and "ETH→Arbitrum→Base→Solana" share the "ETH→Arbitrum" hop. The transposition table caches hop evaluations by a hash of (bridge, fromChain, toChain, amount), avoiding redundant computation.
 
 ## Scoring Function
 
 Routes are scored on five normalized dimensions, each mapped to [0, 1]:
 
-### 1. Fees (weight: 0.30 for minimax)
+### 1. Fees (default weight: 0.25)
 
 ```
 feeRatio = totalFees / inputAmount
 feeScore = clamp(1 - feeRatio / MAX_FEE_RATIO, 0, 1)
 ```
 
-where `MAX_FEE_RATIO = 0.10` (10%). A route costing 5% in fees scores 0.5.
+`MAX_FEE_RATIO = 0.10` (10%). A route costing 5% in total fees scores 0.5.
 
 ### 2. Slippage (weight: 0.25)
 
@@ -146,7 +125,7 @@ where `MAX_FEE_RATIO = 0.10` (10%). A route costing 5% in fees scores 0.5.
 slippageScore = clamp(1 - totalSlippageBps / MAX_SLIPPAGE_BPS, 0, 1)
 ```
 
-where `MAX_SLIPPAGE_BPS = 200` (2%). 100 bps of slippage scores 0.5.
+`MAX_SLIPPAGE_BPS = 200` (2%). 100 bps of slippage scores 0.5.
 
 ### 3. Speed (weight: 0.15)
 
@@ -154,7 +133,7 @@ where `MAX_SLIPPAGE_BPS = 200` (2%). 100 bps of slippage scores 0.5.
 speedScore = clamp(1 - estimatedTimeSeconds / MAX_TIME_SECONDS, 0, 1)
 ```
 
-where `MAX_TIME_SECONDS = 1800` (30 min). A 15-minute route scores 0.5.
+`MAX_TIME_SECONDS = 1800` (30 min). A 15-minute route scores 0.5.
 
 ### 4. Reliability (weight: 0.20)
 
@@ -162,18 +141,16 @@ where `MAX_TIME_SECONDS = 1800` (30 min). A 15-minute route scores 0.5.
 reliabilityScore = product(perHopSuccessRates)
 ```
 
-Per-hop rates are estimated from liquidity depth relative to transfer
-amount. A 2-hop route with 0.98 per-hop reliability scores 0.96.
+Per-hop success rates are derived from bridge health data and liquidity depth relative to transfer amount. A 2-hop route with 0.98 per-hop reliability scores 0.96.
 
-### 5. MEV Exposure (weight: 0.10)
+### 5. MEV Exposure (weight: 0.15)
 
 ```
 mevAmount = sum(hopAmount * timeInHours * chainMevFactor * 0.001)
 mevScore = clamp(1 - mevRatio / MAX_MEV_RATIO, 0, 1)
 ```
 
-where `MAX_MEV_RATIO = 0.05` (5%). Chain MEV factors range from 0.3
-(Base, Avalanche) to 1.0 (Ethereum mainnet).
+`MAX_MEV_RATIO = 0.05` (5%). Chain MEV factors: Ethereum = 1.0, Arbitrum = 0.5, Solana = 0.4, Base = 0.3.
 
 ### Composite score
 
@@ -182,60 +159,50 @@ score = fees * w_fees + slippage * w_slippage + speed * w_speed
       + reliability * w_reliability + mev * w_mev
 ```
 
-## Strategy Profiles
+Weights vary by strategy profile:
 
-| Strategy | Fees | Slippage | Speed | Reliability | MEV  |
-|----------|------|----------|-------|-------------|------|
-| minimax  | 0.30 | 0.25     | 0.15  | 0.20        | 0.10 |
-| cheapest | 0.60 | 0.15     | 0.05  | 0.15        | 0.05 |
-| fastest  | 0.10 | 0.10     | 0.55  | 0.15        | 0.10 |
-| safest   | 0.10 | 0.15     | 0.05  | 0.50        | 0.20 |
+| Strategy | Fees | Slippage | Speed | Reliability | MEV |
+|----------|------|----------|-------|-------------|-----|
+| minimax  | 0.25 | 0.25     | 0.15  | 0.20        | 0.15|
+| cheapest | 0.45 | 0.30     | 0.05  | 0.10        | 0.10|
+| fastest  | 0.10 | 0.15     | 0.50  | 0.15        | 0.10|
+| safest   | 0.10 | 0.15     | 0.10  | 0.40        | 0.25|
 
-All rows sum to 1.0.
+## Worked Example
 
-## Concrete Numeric Example
+Transfer 1,000 USDC from Ethereum to Solana. Two candidate routes:
 
-Transfer 1000 USDC from Ethereum to Solana. Two candidate routes:
-
-### Route A: Ethereum -> Solana via Wormhole (direct)
+### Route A: Ethereum → Solana via Wormhole (direct)
 
 | Dimension   | Raw value        | Normalized | Weight | Weighted |
 |-------------|------------------|------------|--------|----------|
-| Fees        | $5.50 (0.55%)    | 0.945      | 0.30   | 0.284    |
+| Fees        | $5.50 (0.55%)    | 0.945      | 0.25   | 0.236    |
 | Slippage    | 2 bps            | 0.990      | 0.25   | 0.248    |
 | Speed       | 960s             | 0.467      | 0.15   | 0.070    |
 | Reliability | 0.98             | 0.980      | 0.20   | 0.196    |
-| MEV         | $0.15            | 0.997      | 0.10   | 0.100    |
-| **Total**   |                  |            |        | **0.897**|
+| MEV         | $0.15            | 0.997      | 0.15   | 0.150    |
+| **Total**   |                  |            |        | **0.899**|
 
-Adversarial adjustment:
-- Fees: $5.50 * 1.3 = $7.15 -> score 0.929
-- Slippage: 2 * 1.5 = 3 bps -> score 0.985
-- Speed: 960 * 1.4 = 1344s -> score 0.253
-- Reliability: 0.98 * (1 - 0.02) = 0.960
-- MEV: $0.15 + 1000 * 0.005 = $5.15 -> score 0.897
+Under adversarial model:
+- Slippage: 2 bps × 2.0 = 4 bps
+- Gas: +50% surge
+- MEV: +0.3% extraction
 
-Adversarial composite: 0.929*0.30 + 0.985*0.25 + 0.253*0.15 + 0.960*0.20 + 0.897*0.10
-= 0.279 + 0.246 + 0.038 + 0.192 + 0.090 = **0.845**
+Adversarial composite: **0.845**
 
-### Route B: Ethereum -> Arbitrum -> Solana via deBridge + Wormhole
+### Route B: Ethereum → Arbitrum → Solana (deBridge + Wormhole)
 
 | Dimension   | Raw value        | Normalized | Weight | Weighted |
 |-------------|------------------|------------|--------|----------|
-| Fees        | $9.20 (0.92%)    | 0.908      | 0.30   | 0.272    |
+| Fees        | $9.20 (0.92%)    | 0.908      | 0.25   | 0.227    |
 | Slippage    | 9 bps total      | 0.955      | 0.25   | 0.239    |
 | Speed       | 1200s total      | 0.333      | 0.15   | 0.050    |
-| Reliability | 0.98 * 0.97 = 0.951 | 0.951   | 0.20   | 0.190    |
-| MEV         | $0.22            | 0.996      | 0.10   | 0.100    |
-| **Total**   |                  |            |        | **0.851**|
+| Reliability | 0.951            | 0.951      | 0.20   | 0.190    |
+| MEV         | $0.22            | 0.996      | 0.15   | 0.149    |
+| **Total**   |                  |            |        | **0.855**|
 
 Adversarial composite: **0.802**
 
 ### Result
 
-Route A wins with adversarial score 0.845 vs Route B's 0.802. The direct
-Wormhole path is preferred because the 2-hop route accumulates more fees,
-slippage, and failure risk without sufficient upside to compensate.
-
-The minimax guarantee for Route A is ~$975 USDC (after applying all
-adversarial adjustments to the $994.50 expected output).
+Route A wins: adversarial score 0.845 vs 0.802. The direct Wormhole path is preferred because the 2-hop route compounds fees, slippage, and reliability risk without sufficient benefit. The guaranteed minimum for Route A is ~$975 USDC after all adversarial adjustments.

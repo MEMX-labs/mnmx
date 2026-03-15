@@ -4,7 +4,7 @@
 
 # MNMX
 
-[![CI](https://img.shields.io/github/actions/workflow/status/MEMX-labs/MNMX/ci.yml?branch=main&style=flat-square&label=build&color=1a1a2e)](https://github.com/MEMX-labs/MNMX/actions)
+[![CI](https://img.shields.io/github/actions/workflow/status/MEMX-labs/mnmx/ci.yml?branch=main&style=flat-square&label=build&color=1a1a2e)](https://github.com/MEMX-labs/mnmx/actions)
 [![License](https://img.shields.io/badge/license-MIT-1a1a2e?style=flat-square)](./LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-engine-1a1a2e?style=flat-square)](https://www.rust-lang.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-SDK-1a1a2e?style=flat-square)](https://www.typescriptlang.org/)
@@ -15,39 +15,45 @@
 
 ---
 
-**Minimax-optimal cross-chain routing. Evaluate every path, guarantee the best worst-case outcome.**
+**Cross-chain routing that optimizes for the worst case, not the best case.**
 
-Every cross-chain transfer is a game against market conditions. Slippage spikes. Gas surges. Bridge congestion. MEV extraction. Most aggregators optimize for the best case — MNMX optimizes for the **worst case** and guarantees you the best floor.
+Cross-chain transfers are unreliable. Bridges go down mid-transfer. Slippage spikes when you need liquidity most. Gas prices surge between the time you quote and the time you execute. MEV bots front-run your transaction on the destination chain. Every aggregator today picks the route that looks cheapest *right now* — and you eat the loss when conditions shift.
 
-MNMX applies the same class of algorithms that defeated world champions in chess to cross-chain route optimization. The engine enumerates every possible path across bridges, models adversarial market conditions at each hop, and uses **minimax search with alpha-beta pruning** to find the route that maximizes your guaranteed minimum outcome.
+MNMX is a cross-chain routing engine that treats market conditions as adversarial. Instead of optimizing for expected output, it searches across all candidate paths — direct bridges, multi-hop routes through intermediate chains, split-amount strategies — and selects the route that **maximizes your guaranteed minimum outcome** even under worst-case slippage, gas, and bridge delay.
 
-The key insight: bridge routing is structurally isomorphic to game tree search. Your moves are route choices. The opponent's moves are worst-case market conditions. The minimax algorithm finds the path that remains optimal even when everything goes wrong.
+## The Problem
 
-## Why Minimax
+A $100K USDC transfer from Ethereum to Solana has 12+ candidate paths across 4 bridges, including 2-hop routes through Arbitrum, Base, and Polygon. Current aggregators rank these by expected output. That ranking changes the moment conditions shift:
 
-Every other aggregator uses **expected value** optimization — pick the route with the highest average outcome. This works when conditions are stable. It fails catastrophically when they're not.
+```
+Route A (Wormhole direct)       → Expected: $99,500 | If slippage 2x: $96,200
+Route B (deBridge direct)       → Expected: $99,200 | If slippage 2x: $98,800
+Route C (LZ→Arb + Wormhole→Sol) → Expected: $99,050 | If slippage 2x: $98,400
+```
 
-| | Expected Value | Minimax |
-|---|---|---|
-| Optimizes for | Average case | Worst case |
-| When conditions are good | Similar results | Similar results |
-| When conditions are bad | Catastrophic loss | **Best guaranteed floor** |
-| Large transfers | High variance | **Low variance** |
-| Bridge congestion | Unpredictable | **Predictable** |
+An expected-value optimizer picks Route A. MNMX picks Route B — $2,600 more in the worst case. For institutional transfers, protocol treasuries, and DAO operations, that difference compounds.
 
-Consider a $100K transfer with two routes:
-- **Route A**: Expected output $99,500. Worst case: $96,200.
-- **Route B**: Expected output $99,200. Worst case: $98,800.
+## How It Works
 
-Expected-value optimization picks Route A. Minimax picks Route B. When the bridge gets congested and slippage doubles, Route A loses $3,800. Route B loses $1,200. The difference is **$2,600 in guaranteed savings**.
+MNMX models cross-chain routing as a **constrained search problem** where each hop introduces independent adversarial uncertainty. The engine builds a search tree of all candidate paths (direct, 2-hop, 3-hop), applies worst-case multipliers to each hop independently, scores every resulting leaf across five dimensions, and prunes dominated branches early via alpha-beta search.
 
-## Architecture
+### Why this requires search, not sorting
+
+A naive approach — score each route and sort — works for single-hop direct bridges. But multi-hop routes have **combinatorial interactions**: the worst case for hop 1 affects the input to hop 2, which compounds with the worst case for hop 2. With 4 bridges × 8 chains × 3 hop depths, the candidate space grows to thousands of paths. Alpha-beta pruning eliminates 90%+ of these without evaluating them, keeping search under 10ms.
+
+```
+Chains(8) × Bridges(4) × MaxHops(3) = 3,000+ candidate paths
+After alpha-beta pruning:            ~200-500 evaluated
+Search latency:                       <10 ms (Rust engine)
+```
+
+### Architecture
 
 ```mermaid
 graph TD
     A[RouteRequest] --> B[PathDiscovery]
     B --> C[StateCollector]
-    C --> D[MinimaxEngine]
+    C --> D[SearchEngine]
     D --> E[RouteScorer]
     E --> F[RouteExecutor]
 
@@ -80,64 +86,54 @@ graph TD
     J --> N
 ```
 
+### Data Flow
+
+1. **PathDiscovery** enumerates all viable paths: direct bridges, 2-hop routes through intermediate chains (ETH→Arbitrum→Solana), and 3-hop routes when no direct path exists. Each path is a sequence of (bridge, fromChain, toChain) segments.
+
+2. **StateCollector** fetches real-time data for each segment — gas prices from chain RPCs, bridge liquidity from bridge APIs, recent success rates, and token prices.
+
+3. **SearchEngine** builds a search tree where each level represents a hop. At each hop, the adversarial model applies worst-case multipliers independently (slippage could 2x on hop 1, gas could surge on hop 2). The engine searches this tree with alpha-beta pruning to find the path with the best guaranteed floor.
+
+4. **RouteScorer** evaluates each candidate across five weighted dimensions:
+
+| Dimension | Weight | Source |
+|-----------|--------|--------|
+| Fees | 0.25 | Bridge protocol fees + gas costs across all hops |
+| Slippage | 0.25 | Price impact computed from on-chain liquidity depth |
+| Speed | 0.15 | Sum of estimated confirmation times per hop |
+| Reliability | 0.20 | Bridge success rate from historical data |
+| MEV Exposure | 0.15 | Probability-weighted adversarial extraction risk |
+
+5. **RouteExecutor** submits the selected route on-chain, monitoring each hop and triggering fallback paths if a bridge fails mid-transfer.
+
+### Adversarial Model
+
+Each quoted value gets stress-tested with a worst-case multiplier before scoring:
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `slippageMultiplier` | 2.0x | Quoted slippage doubles at each hop |
+| `gasMultiplier` | 1.5x | Gas price surges 50% between quote and execution |
+| `bridgeDelayMultiplier` | 3.0x | Bridge takes 3x longer (affects time-sensitive transfers) |
+| `mevExtraction` | 0.3% | MEV bots extract 0.3% of transfer value |
+| `priceMovement` | 0.5% | Token price moves 0.5% against you during transfer |
+
+These multipliers are configurable. Higher values = more conservative routing, appropriate for large transfers. Lower values = more aggressive routing for small, time-sensitive transfers.
+
 ### Multi-Language Architecture
 
 | Language | Directory | Role |
 |----------|-----------|------|
-| **Rust** | `engine/` | Core search engine. Minimax with alpha-beta pruning, route scoring, path discovery, transposition table. Sub-millisecond search across thousands of candidate paths. |
-| **TypeScript** | `src/` | SDK and bridge integration layer. MnmxRouter, bridge adapters (Wormhole, deBridge, LayerZero, Allbridge), chain configurations, route execution. |
-| **Python** | `sdk/python/` | Research and simulation toolkit. Route simulator, Monte Carlo analysis, batch strategy comparison, CLI. |
-
-### Data Flow
-
-1. **PathDiscovery** enumerates all viable paths between source and destination — direct bridges, 2-hop paths through intermediate chains, 3-hop paths through multiple intermediaries. A transfer from Ethereum to Solana might discover 15+ candidate paths across different bridge combinations.
-
-2. **StateCollector** gathers real-time market data for each path segment — gas prices, bridge liquidity, congestion levels, recent success rates, token prices.
-
-3. **MinimaxEngine** models each path as a game tree. Your move: choose a route. The adversary's move: worst-case market conditions (slippage spike, gas surge, bridge delay, MEV extraction). The engine searches this tree with alpha-beta pruning to find the route with the **best guaranteed minimum outcome**.
-
-4. **RouteScorer** evaluates every leaf across five weighted dimensions:
-
-| Dimension | Weight | What it captures |
-|-----------|--------|------------------|
-| Fees | 0.25 | Bridge fees + gas costs across all hops |
-| Slippage | 0.25 | Price impact relative to liquidity depth |
-| Speed | 0.15 | Total estimated transfer time |
-| Reliability | 0.20 | Historical bridge success rate |
-| MEV Exposure | 0.15 | Probability-weighted adversarial extraction |
-
-5. **RouteExecutor** executes the optimal route, monitoring each hop and handling failures with automatic fallback.
-
-### Adversarial Model
-
-The adversarial model controls worst-case estimation. Every quoted value gets multiplied by a worst-case factor:
-
-| Parameter | Default | What it models |
-|-----------|---------|----------------|
-| `slippageMultiplier` | 2.0x | Quoted slippage doubles |
-| `gasMultiplier` | 1.5x | Gas price surges 50% |
-| `bridgeDelayMultiplier` | 3.0x | Bridge takes 3x longer |
-| `mevExtraction` | 0.3% | MEV bots extract 0.3% of value |
-| `priceMovement` | 0.5% | Token price moves 0.5% against you |
-
-Higher multipliers = more conservative routing. The engine will prefer routes with lower variance over routes with higher expected value. This is appropriate when protecting large transfers.
-
-### Engine Performance
-
-| Property | Value | Context |
-|----------|-------|---------|
-| Candidate paths | 10-50 | Per chain pair, across all bridge combinations |
-| Search nodes | 500-5,000 | Alpha-beta pruning eliminates 90%+ of the search space |
-| Search latency | <10 ms | Rust engine, cache-optimized |
-| Supported chains | 8 | Ethereum, Solana, Arbitrum, Base, Polygon, BNB, Optimism, Avalanche |
-| Supported bridges | 4 | Wormhole, deBridge, LayerZero, Allbridge |
+| **Rust** | `engine/` | Core search engine — path enumeration, alpha-beta pruning, transposition table, route scoring. Processes thousands of candidate paths in <10ms. |
+| **TypeScript** | `src/` | SDK and bridge integration — MnmxRouter, bridge adapters (Wormhole, deBridge, LayerZero, Allbridge), chain configs, route execution. |
+| **Python** | `sdk/python/` | Research and analysis — Monte Carlo simulation, batch strategy comparison, route visualization, CLI. |
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/MEMX-labs/MNMX.git
-cd MNMX
-npm ci
+git clone https://github.com/MEMX-labs/mnmx.git
+cd mnmx
+npm install
 npm run build
 npm test
 ```
@@ -154,13 +150,13 @@ const router = new MnmxRouter({
 
 // Find the optimal route
 const route = await router.findRoute({
-  from: { chain: 'ethereum', token: 'ETH', amount: '1.0' },
-  to:   { chain: 'solana',   token: 'SOL' },
+  from: { chain: 'ethereum', token: 'USDC', amount: '100000' },
+  to:   { chain: 'solana',   token: 'USDC' },
 });
 
 console.log(route.path);              // Route hops
 console.log(route.expectedOutput);    // Best-case output
-console.log(route.guaranteedMinimum); // Minimax worst-case output
+console.log(route.guaranteedMinimum); // Worst-case guaranteed output
 console.log(route.estimatedTime);     // Expected transfer time
 console.log(route.totalFees);         // Total fees across all hops
 
@@ -173,40 +169,40 @@ console.log(result.actualOutput);
 ### Strategy Profiles
 
 ```typescript
-// Minimax (default) -- best guaranteed minimum outcome
+// Minimax (default) — best guaranteed minimum outcome
 const router = new MnmxRouter({ strategy: 'minimax' });
 
-// Cheapest -- minimize total fees
+// Cheapest — minimize total fees (higher variance)
 const router = new MnmxRouter({ strategy: 'cheapest' });
 
-// Fastest -- minimize transfer time
+// Fastest — minimize transfer time
 const router = new MnmxRouter({ strategy: 'fastest' });
 
-// Safest -- maximize bridge reliability
+// Safest — maximize bridge reliability
 const router = new MnmxRouter({ strategy: 'safest' });
 ```
 
 | Strategy | Fees | Slippage | Speed | Reliability | MEV | Use Case |
 |----------|------|----------|-------|-------------|-----|----------|
-| **minimax** | 0.25 | 0.25 | 0.15 | 0.20 | 0.15 | Best guaranteed outcome (default) |
-| **cheapest** | 0.45 | 0.30 | 0.05 | 0.10 | 0.10 | Minimize total cost |
-| **fastest** | 0.10 | 0.15 | 0.50 | 0.15 | 0.10 | Minimize transfer time |
-| **safest** | 0.10 | 0.15 | 0.10 | 0.40 | 0.25 | Maximize security |
+| **minimax** | 0.25 | 0.25 | 0.15 | 0.20 | 0.15 | Large transfers, treasury ops |
+| **cheapest** | 0.45 | 0.30 | 0.05 | 0.10 | 0.10 | Small transfers, cost-sensitive |
+| **fastest** | 0.10 | 0.15 | 0.50 | 0.15 | 0.10 | Time-critical arbitrage |
+| **safest** | 0.10 | 0.15 | 0.10 | 0.40 | 0.25 | High-value, risk-averse |
 
 ### Compare Routes
 
 ```typescript
 const routes = await router.findAllRoutes({
-  from: { chain: 'ethereum', token: 'ETH', amount: '1.0' },
-  to:   { chain: 'solana',   token: 'SOL' },
+  from: { chain: 'ethereum', token: 'USDC', amount: '100000' },
+  to:   { chain: 'solana',   token: 'USDC' },
 });
 
 for (const route of routes) {
-  console.log(`${route.path.join(' -> ')}`);
-  console.log(`  Expected: ${route.expectedOutput} SOL`);
-  console.log(`  Minimum:  ${route.guaranteedMinimum} SOL`);
-  console.log(`  Fees:     ${route.totalFees}`);
-  console.log(`  Time:     ${route.estimatedTime}`);
+  console.log(`${route.path.join(' → ')}`);
+  console.log(`  Expected:   ${route.expectedOutput} USDC`);
+  console.log(`  Guaranteed: ${route.guaranteedMinimum} USDC`);
+  console.log(`  Fees:       ${route.totalFees}`);
+  console.log(`  Time:       ${route.estimatedTime}s`);
 }
 ```
 
@@ -219,22 +215,22 @@ router = MnmxRouter(strategy="minimax")
 
 route = router.find_route(
     from_chain="ethereum",
-    from_token="ETH",
-    amount="1.0",
+    from_token="USDC",
+    amount="100000",
     to_chain="solana",
-    to_token="SOL",
+    to_token="USDC",
 )
 
-# Monte Carlo simulation
+# Monte Carlo simulation — run 10K scenarios with randomized market conditions
 sim = RouteSimulator()
 mc = sim.monte_carlo(route=route, iterations=10_000, seed=42)
 
-print(f"Mean output: {mc.mean_output:.4f} SOL")
-print(f"5th percentile: {mc.percentile_5:.4f} SOL")
-print(f"Worst observed: {mc.min_output:.4f} SOL")
+print(f"Mean output:    {mc.mean_output:.2f} USDC")
+print(f"5th percentile: {mc.percentile_5:.2f} USDC")
+print(f"Worst observed: {mc.min_output:.2f} USDC")
 ```
 
-### Custom Bridge
+### Custom Bridge Adapter
 
 ```typescript
 import { BridgeAdapter } from '@mnmx/core';
@@ -262,10 +258,10 @@ class MyBridgeAdapter implements BridgeAdapter {
 router.registerBridge(new MyBridgeAdapter());
 ```
 
-## Supported Chains
+## Supported Chains & Bridges
 
-| Chain | Bridges Available |
-|-------|-------------------|
+| Chain | Bridges |
+|-------|---------|
 | Ethereum | Wormhole, deBridge, LayerZero, Allbridge |
 | Solana | Wormhole, deBridge, Allbridge |
 | Arbitrum | Wormhole, deBridge, LayerZero |
@@ -277,32 +273,23 @@ router.registerBridge(new MyBridgeAdapter());
 
 ## API Reference
 
-Full API documentation: **[mnmx.app/docs](https://mnmx.app/docs)**
-
-### Core Classes
+Full documentation: **[mnmx.app/docs](https://mnmx.app/docs)**
 
 | Class | Purpose |
 |-------|---------|
-| `MnmxRouter` | Main entry point -- route discovery, optimization, and execution |
-| `MinimaxEngine` | Core search engine -- minimax with alpha-beta pruning |
-| `PathDiscovery` | Enumerate all candidate paths across bridges |
-| `RouteScorer` | Multi-dimensional route evaluation |
-| `BridgeAdapter` | Interface for bridge integrations |
-| `RouteSimulator` | Simulate routes under adversarial conditions (Python) |
-
-## References
-
-- Von Neumann, J. (1928). "Zur Theorie der Gesellschaftsspiele." *Mathematische Annalen*, 100(1), 295-320.
-- Shannon, C. E. (1950). "Programming a Computer for Playing Chess." *Philosophical Magazine*, 41(314).
-- Knuth, D. E. & Moore, R. W. (1975). "An Analysis of Alpha-Beta Pruning." *Artificial Intelligence*, 6(4), 293-326.
+| `MnmxRouter` | Main entry point — route discovery, optimization, and execution |
+| `PathDiscovery` | Enumerate all candidate paths (direct, multi-hop) across bridges |
+| `RouteScorer` | Multi-dimensional weighted route evaluation |
+| `BridgeAdapter` | Interface for adding new bridge integrations |
+| `RouteSimulator` | Monte Carlo simulation under adversarial conditions (Python) |
 
 ## Links
 
 - Website: [mnmx.app](https://mnmx.app)
 - Documentation: [mnmx.app/docs](https://mnmx.app/docs)
-- GitHub: [github.com/MEMX-labs/MNMX](https://github.com/MEMX-labs/MNMX)
+- GitHub: [github.com/MEMX-labs/mnmx](https://github.com/MEMX-labs/mnmx)
 - Twitter: [x.com/mnmxapp](https://x.com/mnmxapp)
 
 ## License
 
-[MIT](./LICENSE) -- Copyright (c) 2026 MNMX Protocol
+[MIT](./LICENSE) — Copyright (c) 2026 MNMX Protocol

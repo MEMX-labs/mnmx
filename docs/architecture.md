@@ -2,11 +2,13 @@
 
 ## System Overview
 
-MNMX is a cross-chain routing protocol that treats token bridging as a game-tree
-search problem. Instead of greedily picking the cheapest or fastest bridge, MNMX
-uses minimax search to find the route with the best **guaranteed minimum
-outcome** under adversarial conditions (slippage spikes, MEV extraction, gas
-surges, bridge delays).
+MNMX is a cross-chain routing engine that searches across all candidate paths
+(direct bridges, multi-hop routes, split-amount strategies) and selects the
+route with the best **guaranteed minimum outcome** under worst-case market
+conditions. Instead of ranking routes by expected output, it applies adversarial
+stress-testing at each hop — modeling slippage spikes, gas surges, MEV
+extraction, and bridge delays — then picks the path that remains optimal
+even when everything degrades.
 
 The system is split across three languages, each chosen for its strengths:
 
@@ -72,7 +74,7 @@ A route request flows through five stages:
          |
 2. State Collection   Fetch quotes from each bridge for each hop
          |
-3. Minimax Search     Game-tree search with alpha-beta pruning
+3. Adversarial Search Alpha-beta pruning with worst-case modeling
          |
 4. Route Evaluation   Score routes on 5 dimensions, rank by strategy
          |
@@ -93,11 +95,11 @@ of available bridges per hop). For each combination, fetch quotes sequentially
 (the output of hop N becomes the input of hop N+1). Discard combinations where
 any bridge fails to quote.
 
-### Stage 3: Minimax Search
+### Stage 3: Adversarial Search
 
-Treat each candidate path as a game tree node. The **maximizer** (the user)
-picks the path with the best guaranteed outcome. The **minimizer** (the
-adversarial model) applies worst-case multipliers:
+Each candidate path is evaluated under worst-case conditions. The engine
+maximizes the guaranteed minimum outcome by applying adversarial multipliers
+at each hop independently:
 
 - Slippage x1.5
 - Gas costs x1.3
@@ -149,12 +151,14 @@ hash generation.
 
 ## Design Decisions
 
-### Why minimax instead of expected value?
+### Why worst-case optimization instead of expected value?
 
 Expected-value optimization averages over outcomes. In cross-chain routing,
 tail risks (bridge failures, MEV extraction, gas spikes) are correlated and
-can compound across hops. Minimax guarantees the best **worst-case** outcome,
-making it suitable for users who need certainty about minimum received amounts.
+compound across hops. Worst-case optimization guarantees the best **minimum**
+outcome, making it suitable for institutional transfers, protocol treasuries,
+and any scenario where certainty about the floor matters more than chasing
+the highest average.
 
 ### Why multi-language?
 
