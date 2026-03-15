@@ -1,4 +1,4 @@
-import type { Chain, ChainConfig } from '../types';
+import type { Chain, ChainConfig } from '../types/index.js';
 
 const configCache = new Map<Chain, ChainConfig>();
 
