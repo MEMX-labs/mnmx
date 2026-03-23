@@ -21,19 +21,13 @@ describe('Zero Amount Edge Cases', () => {
   });
 
   it('computeScore returns finite number for zero dimensions', () => {
-    const score = computeScore(
-      { feeScore: 0, slippageScore: 0, speedScore: 0, reliabilityScore: 0, mevScore: 0 },
-      STRATEGY_WEIGHTS.minimax
-    );
+    const score = computeScore(0, 0, 0, 0, 0, STRATEGY_WEIGHTS.minimax);
     expect(Number.isFinite(score)).toBe(true);
     expect(score).toBe(0);
   });
 
   it('computeScore returns 1.0 for perfect scores', () => {
-    const score = computeScore(
-      { feeScore: 1, slippageScore: 1, speedScore: 1, reliabilityScore: 1, mevScore: 1 },
-      STRATEGY_WEIGHTS.minimax
-    );
+    const score = computeScore(1, 1, 1, 1, 1, STRATEGY_WEIGHTS.minimax);
     expect(score).toBeCloseTo(1, 2);
   });
 });
