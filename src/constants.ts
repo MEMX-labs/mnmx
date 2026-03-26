@@ -33,3 +33,8 @@ export const QUOTE_STALENESS_MS = 15_000;
 
 /** Maximum adapter response time in ms before timeout. */
 export const ADAPTER_TIMEOUT_MS = 10_000;
+
+export const CHAIN_GAS_MULTIPLIERS: Record<string, number> = {
+  ethereum: 1.5, arbitrum: 1.2, optimism: 1.2, base: 1.1,
+  polygon: 1.3, bsc: 1.1, avalanche: 1.2, solana: 1.0,
+};
