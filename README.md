@@ -4,14 +4,18 @@
 
 # MNMX
 
-[![CI](https://img.shields.io/github/actions/workflow/status/MEMX-labs/mnmx/ci.yml?branch=main&style=flat-square&label=build&color=1a1a2e)](https://github.com/MEMX-labs/mnmx/actions)
-[![License](https://img.shields.io/badge/license-MIT-1a1a2e?style=flat-square)](./LICENSE)
-[![Rust](https://img.shields.io/badge/Rust-engine-1a1a2e?style=flat-square)](https://www.rust-lang.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-SDK-1a1a2e?style=flat-square)](https://www.typescriptlang.org/)
-[![Python](https://img.shields.io/badge/Python-SDK-1a1a2e?style=flat-square)](https://www.python.org/)
-[![Website](https://img.shields.io/badge/website-mnmx.app-1a1a2e?style=flat-square)](https://mnmx.app)
-[![Twitter](https://img.shields.io/badge/twitter-@mnmxapp-1a1a2e?style=flat-square)](https://x.com/mnmxapp)
-[![Docs](https://img.shields.io/badge/docs-mnmx.app%2Fdocs-1a1a2e?style=flat-square)](https://mnmx.app/docs)
+<p align="center">
+  <a href="https://github.com/MEMX-labs/mnmx/actions"><img src="https://img.shields.io/github/actions/workflow/status/MEMX-labs/mnmx/ci.yml?branch=main&style=flat-square&label=build&color=1a1a2e" alt="CI" /></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-1a1a2e?style=flat-square" alt="License" /></a>
+  <a href="https://github.com/MEMX-labs/mnmx"><img src="https://img.shields.io/github/stars/MEMX-labs/mnmx?style=flat-square&color=1a1a2e" alt="Stars" /></a>
+  <a href="https://github.com/MEMX-labs/mnmx"><img src="https://img.shields.io/github/last-commit/MEMX-labs/mnmx?style=flat-square&color=1a1a2e" alt="Last Commit" /></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-engine-1a1a2e?style=flat-square" alt="Rust" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-SDK-1a1a2e?style=flat-square" alt="TypeScript" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-SDK-1a1a2e?style=flat-square" alt="Python" /></a>
+  <a href="https://mnmx.app"><img src="https://img.shields.io/badge/website-mnmx.app-1a1a2e?style=flat-square" alt="Website" /></a>
+  <a href="https://x.com/mnmxapp"><img src="https://img.shields.io/badge/twitter-@mnmxapp-1a1a2e?style=flat-square" alt="Twitter" /></a>
+  <a href="https://mnmx.app/docs"><img src="https://img.shields.io/badge/docs-mnmx.app%2Fdocs-1a1a2e?style=flat-square" alt="Docs" /></a>
+</p>
 
 ---
 
@@ -282,6 +286,45 @@ Full documentation: **[mnmx.app/docs](https://mnmx.app/docs)**
 | `RouteScorer` | Multi-dimensional weighted route evaluation |
 | `BridgeAdapter` | Interface for adding new bridge integrations |
 | `RouteSimulator` | Monte Carlo simulation under adversarial conditions (Python) |
+
+## Project Structure
+
+```
+mnmx/
+├── engine/              Rust core — alpha-beta search, scoring, transposition table
+│   └── src/
+│       ├── search.rs        minimax search with pruning
+│       ├── scoring.rs       5-dimension route evaluation
+│       ├── adversarial.rs   worst-case scenario generator
+│       └── table.rs         transposition table (Zobrist hashing)
+├── src/                 TypeScript SDK — router, bridge adapters, execution
+│   ├── router/
+│   │   ├── minimax.ts       search engine orchestration
+│   │   ├── scoring.ts       route scoring and normalization
+│   │   └── path-discovery.ts  candidate path enumeration
+│   ├── bridges/
+│   │   ├── wormhole.ts      Wormhole guardian network adapter
+│   │   ├── debridge.ts      deBridge DLN adapter
+│   │   ├── layerzero.ts     LayerZero DVN adapter
+│   │   └── allbridge.ts     Allbridge liquidity pool adapter
+│   ├── chains/              chain configs, RPC, gas oracle (8 chains)
+│   ├── types/               shared interfaces and strategy weights
+│   └── utils/               math, logger, hash utilities
+├── sdk/python/          Python SDK — simulation, Monte Carlo, CLI
+│   └── mnmx/
+│       ├── router.py        route discovery and execution
+│       ├── simulator.py     Monte Carlo adversarial simulation
+│       └── cli.py           command-line interface
+├── tests/               unit, integration, bridge adapter tests
+├── scripts/             backtest, live-status, benchmark, live-transfer
+├── examples/            usage examples (basic-route, compare-strategies)
+├── benchmarks/          scoring performance benchmarks
+└── docs/                architecture, algorithm docs, API reference
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 ## Links
 

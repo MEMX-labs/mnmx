@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://mnmx.app/docs
+    about: Read the documentation before opening an issue.
+  - name: Twitter
+    url: https://x.com/mnmxapp
+    about: Follow for updates.

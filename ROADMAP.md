@@ -45,27 +45,15 @@
 
 ---
 
-## In Progress
+## Shipped
 
 - [x] Server-side route processing
 - [x] Real-time multi-bridge quote aggregation
 - [x] Incremental search
-- [ ] Adapter circuit breaker and failover
-- [ ] Structured logging with trace IDs
-- [ ] Latency monitoring and alerting
-- [ ] Dynamic adversarial calibration (per-chain, per-bridge multiplier tuning from execution data)
-- [ ] Probabilistic path exploration (discover multi-hop routes beyond static connectivity graph)
-
-## Planned
-
-- [ ] Circle CCTP v2, Stargate, Hop, Across adapters
-- [ ] Portfolio-aware routing and split transfers
-- [ ] Sui, Aptos, Monad, Berachain support
-- [ ] Python SDK and Rust SDK
-- [ ] WebSocket API for real-time route streaming
-- [ ] On-chain route verification and governance
-- [ ] Staking for premium routing access
+- [x] CLI scripts for backtest, live status, and transfer execution
+- [x] Dynamic adversarial calibration
+- [x] Route cache with TTL and LRU eviction
 
 ---
 
-Last updated: 2026-03-22
+Last updated: 2026-04-13
