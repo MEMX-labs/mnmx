@@ -19,8 +19,8 @@ classifiers = [
 [project.urls]
 Homepage = "https://mnmx.app"
 Documentation = "https://mnmx.app/docs"
-Repository = "https://github.com/MEMX-labs/mnmx"
-Issues = "https://github.com/MEMX-labs/mnmx/issues"
+Repository = "https://github.com/MNMX-labs/mnmx"
+Issues = "https://github.com/MNMX-labs/mnmx/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sdk/python/mnmx"]

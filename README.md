@@ -5,10 +5,10 @@
 # MNMX
 
 <p align="center">
-  <a href="https://github.com/MEMX-labs/mnmx/actions"><img src="https://img.shields.io/github/actions/workflow/status/MEMX-labs/mnmx/ci.yml?branch=main&style=flat-square&label=build&color=1a1a2e" alt="CI" /></a>
+  <a href="https://github.com/MNMX-labs/mnmx/actions"><img src="https://img.shields.io/github/actions/workflow/status/MNMX-labs/mnmx/ci.yml?branch=main&style=flat-square&label=build&color=1a1a2e" alt="CI" /></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-1a1a2e?style=flat-square" alt="License" /></a>
-  <a href="https://github.com/MEMX-labs/mnmx"><img src="https://img.shields.io/github/stars/MEMX-labs/mnmx?style=flat-square&color=1a1a2e" alt="Stars" /></a>
-  <a href="https://github.com/MEMX-labs/mnmx"><img src="https://img.shields.io/github/last-commit/MEMX-labs/mnmx?style=flat-square&color=1a1a2e" alt="Last Commit" /></a>
+  <a href="https://github.com/MNMX-labs/mnmx"><img src="https://img.shields.io/github/stars/MNMX-labs/mnmx?style=flat-square&color=1a1a2e" alt="Stars" /></a>
+  <a href="https://github.com/MNMX-labs/mnmx"><img src="https://img.shields.io/github/last-commit/MNMX-labs/mnmx?style=flat-square&color=1a1a2e" alt="Last Commit" /></a>
   <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-engine-1a1a2e?style=flat-square" alt="Rust" /></a>
   <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-SDK-1a1a2e?style=flat-square" alt="TypeScript" /></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-SDK-1a1a2e?style=flat-square" alt="Python" /></a>
@@ -135,7 +135,7 @@ These multipliers are configurable. Higher values = more conservative routing, a
 ## Quick Start
 
 ```bash
-git clone https://github.com/MEMX-labs/mnmx.git
+git clone https://github.com/MNMX-labs/mnmx.git
 cd mnmx
 npm install
 npm run build
@@ -330,7 +330,7 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
 
 - Website: [mnmx.app](https://mnmx.app)
 - Documentation: [mnmx.app/docs](https://mnmx.app/docs)
-- GitHub: [github.com/MEMX-labs/mnmx](https://github.com/MEMX-labs/mnmx)
+- GitHub: [github.com/MNMX-labs/mnmx](https://github.com/MNMX-labs/mnmx)
 - Twitter: [x.com/mnmxapp](https://x.com/mnmxapp)
 - Ticker: $MNMX
 
